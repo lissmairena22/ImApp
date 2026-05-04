@@ -15,6 +15,13 @@ class Product extends Model
         'manage_stock', 'estimated_production_time', 'is_active'
     ];
 
-    public function categoria() { return $this->belongsTo(Category::class); }
-    public function unidad() { return $this->belongsTo(Unit::class); }
+
+    public function getRequiresProductionAttribute(): bool
+    {
+        return $this->type === 'Servicio' && ($this->estimated_production_time > 0);
+    }
+
+    // Relaciones
+    public function categoria() { return $this->belongsTo(Category::class, 'category_id'); }
+    public function unidad() { return $this->belongsTo(Unit::class, 'unit_id'); }
 }

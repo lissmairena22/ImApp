@@ -60,6 +60,7 @@
 
                 <x-menu-sub title="Comercial" icon="o-banknotes">
                     <x-menu-item title="Nueva Venta" icon="o-shopping-cart" link="/ventas" />
+                    <x-menu-item title="Devoluciones" icon="o-arrow-path-rounded-square" link="/devoluciones" />
                     <x-menu-item title="Clientes" icon="o-user-group" link="/clientes" />
                     <x-menu-item title="Reporte de Ventas" icon="o-document-chart-bar" link="/reportes-ventas" />
                 </x-menu-sub>
