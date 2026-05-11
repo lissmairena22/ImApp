@@ -74,6 +74,7 @@
                 <x-menu-sub title="Configuración" icon="o-cog-8-tooth">
                     <x-menu-item title="Usuarios" icon="o-users" link="/usuarios" />
                     <x-menu-item title="Cajas y Turnos" icon="o-calculator" link="/cajas" />
+                    <x-menu-item title="Mantenimiento" icon="o-wrench-screwdriver" link="{{ route('mantenimiento') }}" />
                 </x-menu-sub>
 
             </x-menu>
