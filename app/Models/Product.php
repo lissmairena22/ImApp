@@ -25,3 +25,4 @@ class Product extends Model
     public function categoria() { return $this->belongsTo(Category::class, 'category_id'); }
     public function unidad() { return $this->belongsTo(Unit::class, 'unit_id'); }
 }
+
