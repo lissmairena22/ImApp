@@ -67,8 +67,9 @@
 
                 <x-menu-sub title="Inventario" icon="o-archive-box">
                     <x-menu-item title="Productos/Materiales" icon="o-square-3-stack-3d" link="/productos" />
-                   <x-menu-item title="Compras/Insumos" icon="o-truck" link="/compras" />
-                    <x-menu-item title="Proveedores" icon="o-user-plus" link="/proveedores" />
+                    <x-menu-item title="Compras/Insumos" icon="o-truck" link="/compras" />
+                    {{-- Nuevo ítem de Proveedores --}}
+                    <x-menu-item title="Proveedores" icon="o-building-office-2" link="/proveedores" />
                 </x-menu-sub>
 
                 <x-menu-separator />
