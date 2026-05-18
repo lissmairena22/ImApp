@@ -535,7 +535,7 @@ new class extends Component {
                 @php
                     $recv       = (float) $received_amount;
                     $isDisabled = match(true) {
-                        $is_mixed            => $recv <= 0,
+                        $is_mixed            => $recv < (float) $minimum_payment,
                         $order_type === 'Rapido' => $recv < (float) $total,
                         default              => false,
                     };
