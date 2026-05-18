@@ -15,13 +15,13 @@ new class extends Component {
     public $total = 0;
     public $discount = 0;
 
-    public $quick_subtotal = 0;       // Subtotal de ítems de entrega inmediata
-    public $production_subtotal = 0;  // Subtotal de ítems de taller
-    public $quick_total = 0;          // Total con IVA de entrega inmediata
-    public $production_total = 0;     // Total con IVA de taller
-    public $minimum_payment = 0;      // Pago mínimo obligatorio
-    public bool $is_mixed = false;    // ¿El carrito tiene ambos tipos?
-    public bool $pay_full = false;    // ¿El cliente elige pagar todo?
+    public $quick_subtotal = 0;
+    public $production_subtotal = 0;
+    public $quick_total = 0;
+    public $production_total = 0;
+    public $minimum_payment = 0;
+    public $is_mixed = false;
+    public $pay_full = false;
 
     public $received_amount = 0;
     public $change_amount = 0;
@@ -30,7 +30,7 @@ new class extends Component {
     public $delivery_date;
     public $hasProductionItems = false;
 
-    public bool $showProductModal = false;
+    public $showProductModal = false;
     public $new_name = '';
     public $new_price = 0;
     public $new_type = 'Producto';
@@ -65,14 +65,14 @@ new class extends Component {
             $this->cart[$id]['quantity']++;
         } else {
             $this->cart[$id] = [
-                'id' => $id,
-                'name' => $product->name,
-                'price' => $product->sale_price,
-                'quantity' => 1,
-                'type' => $product->type,
+                'id'                  => $id,
+                'name'                => $product->name,
+                'price'               => $product->sale_price,
+                'quantity'            => 1,
+                'type'                => $product->type,
                 'requires_production' => (bool) $product->requires_production,
-                'measurements' => '',
-                'material' => '',
+                'measurements'        => '',
+                'material'            => '',
             ];
         }
         $this->checkProductionRequirements();
@@ -81,23 +81,23 @@ new class extends Component {
 
     public function saveNewProduct() {
         $this->validate([
-            'new_name' => 'required|min:3',
-            'new_price' => 'required|numeric|min:0',
-            'new_type' => 'required|in:Producto,Servicio',
+            'new_name'        => 'required|min:3',
+            'new_price'       => 'required|numeric|min:0',
+            'new_type'        => 'required|in:Producto,Servicio',
             'new_category_id' => 'required|exists:categories,id',
-            'new_unit_id' => 'required|exists:units,id',
+            'new_unit_id'     => 'required|exists:units,id',
         ]);
 
         $product = Product::create([
-            'name' => $this->new_name,
-            'sale_price' => $this->new_price,
-            'type' => $this->new_type,
+            'name'                => $this->new_name,
+            'sale_price'          => $this->new_price,
+            'type'                => $this->new_type,
             'requires_production' => $this->new_requires_production,
-            'stock' => ($this->new_type === 'Producto') ? $this->new_stock : 0,
-            'category_id' => $this->new_category_id,
-            'unit_id' => $this->new_unit_id,
-            'is_active' => true,
-            'manage_stock' => ($this->new_type === 'Producto'),
+            'stock'               => ($this->new_type === 'Producto') ? $this->new_stock : 0,
+            'category_id'         => $this->new_category_id,
+            'unit_id'             => $this->new_unit_id,
+            'is_active'           => true,
+            'manage_stock'        => ($this->new_type === 'Producto'),
         ]);
 
         $this->addToCart($product);
@@ -111,6 +111,7 @@ new class extends Component {
         $this->checkProductionRequirements();
         $this->calculateTotals();
     }
+
     public function checkProductionRequirements() {
         $items = collect($this->cart);
 
@@ -118,46 +119,37 @@ new class extends Component {
         $hasQuick      = $items->contains('requires_production', false);
 
         $this->hasProductionItems = $hasProduction;
-        $this->is_mixed = $hasProduction && $hasQuick;
+        $this->is_mixed           = $hasProduction && $hasQuick;
 
         if ($this->is_mixed) {
             $this->order_type = 'Mixto';
         } elseif ($hasProduction) {
             $this->order_type = 'Produccion';
-        } elseif (! $hasQuick) {
-            // Carrito vacío → resetear
-            $this->order_type = 'Rapido';
         } else {
             $this->order_type = 'Rapido';
         }
 
-        if (! $this->is_mixed) {
+        if (!$this->is_mixed) {
             $this->pay_full = false;
         }
     }
+
     public function calculateTotals() {
         $items = collect($this->cart);
 
-        $this->quick_subtotal      = $items->where('requires_production', false)
-            ->sum(fn($i) => $i['price'] * $i['quantity']);
+        $this->quick_subtotal      = $items->where('requires_production', false)->sum(fn($i) => $i['price'] * $i['quantity']);
+        $this->production_subtotal = $items->where('requires_production', true)->sum(fn($i) => $i['price'] * $i['quantity']);
 
-        $this->production_subtotal = $items->where('requires_production', true)
-            ->sum(fn($i) => $i['price'] * $i['quantity']);
+        $this->subtotal         = $this->quick_subtotal + $this->production_subtotal;
+        $this->tax              = round($this->subtotal * 0.15, 2);
+        $this->total            = round(($this->subtotal + $this->tax) - $this->discount, 2);
+        $this->quick_total      = round($this->quick_subtotal * 1.15, 2);
+        $this->production_total = round($this->production_subtotal * 1.15, 2);
+        $this->minimum_payment  = $this->is_mixed ? $this->quick_total : $this->total;
 
-        $this->subtotal = $this->quick_subtotal + $this->production_subtotal;
-        $this->tax      = $this->subtotal * 0.15;
-        $this->total    = ($this->subtotal + $this->tax) - $this->discount;
+        $this->received_amount = (float) $this->received_amount;
 
-        $this->quick_total      = $this->quick_subtotal * 1.15;
-        $this->production_total = $this->production_subtotal * 1.15;
-
-        if ($this->is_mixed) {
-            $this->minimum_payment = $this->quick_total;
-        } else {
-            $this->minimum_payment = $this->total;
-        }
-
-        if ($this->order_type === 'Rapido' && $this->received_amount == 0) {
+        if ($this->order_type === 'Rapido' && $this->received_amount == 0 && !$this->is_mixed) {
             $this->received_amount = $this->total;
         }
 
@@ -167,26 +159,20 @@ new class extends Component {
 
         $this->calculateChange();
     }
+
     public function calculateChange() {
-        if ($this->order_type === 'Rapido') {
-            $this->change_amount = $this->received_amount > $this->total
-                ? $this->received_amount - $this->total
-                : 0;
-        } elseif ($this->is_mixed) {
-            $this->change_amount = $this->received_amount > $this->total
-                ? $this->received_amount - $this->total
-                : 0;
-        } else {
-            $this->change_amount = 0;
-        }
+        $this->change_amount = ($this->received_amount > $this->total && in_array($this->order_type, ['Rapido', 'Mixto']))
+            ? round($this->received_amount - $this->total, 2)
+            : 0;
     }
 
     public function updatedPayFull($value) {
-        $this->received_amount = $value ? $this->total : $this->minimum_payment;
+        $this->received_amount = (float) ($value ? $this->total : $this->minimum_payment);
         $this->calculateChange();
     }
 
     public function updatedReceivedAmount() {
+        $this->received_amount = (float) $this->received_amount;
         if ($this->is_mixed && $this->received_amount != $this->total) {
             $this->pay_full = false;
         }
@@ -196,17 +182,17 @@ new class extends Component {
     public function updatedOrderType() {
         $this->calculateTotals();
     }
+
     public function saveAll() {
+        $this->received_amount = (float) $this->received_amount;
+
         if (empty($this->cart)) {
             session()->flash('error', '⚠️ Carrito vacío');
             return;
         }
 
         $finalClientId = $this->client_id
-            ?: Client::firstOrCreate(
-                ['name' => 'Cliente General'],
-                ['phone' => '00000000']
-            )->id;
+            ?: Client::firstOrCreate(['name' => 'Cliente General'], ['phone' => '00000000'])->id;
 
         if ($this->order_type === 'Rapido' && $this->received_amount < $this->total) {
             session()->flash('error', '❌ Pago insuficiente para factura rápida.');
@@ -214,38 +200,32 @@ new class extends Component {
         }
 
         if ($this->is_mixed && $this->received_amount < $this->minimum_payment) {
-            session()->flash(
-                'error',
-                '❌ Pago insuficiente. Mínimo requerido: C$ ' . number_format($this->minimum_payment, 2)
-                . ' (cubre los artículos de entrega inmediata).'
-            );
+            session()->flash('error', '❌ Pago insuficiente. Mínimo requerido: C$ ' . number_format($this->minimum_payment, 2));
             return;
         }
+
         try {
             DB::transaction(function () use ($finalClientId) {
-
-                $actualPayment = min($this->received_amount, $this->total);
-
+                $actualPayment  = min($this->received_amount, $this->total);
                 $pendingBalance = $this->total - $actualPayment;
 
-                $orderStatus = match ($this->order_type) {
-                    'Rapido'    => 'Entregado',
-                    'Produccion'=> 'Pendiente',
-                    'Mixto'     => 'Parcial',   // ← nuevo estado para mixto
-                    default     => 'Pendiente',
+                $orderStatus   = match ($this->order_type) {
+                    'Rapido'     => 'Entregado',
+                    'Produccion' => 'Pendiente',
+                    'Mixto'      => 'Parcial',
+                    default      => 'Pendiente',
                 };
-                $invoiceStatus = ($pendingBalance > 0) ? 'Credito' : 'Pagada';
+                $invoiceStatus = $pendingBalance > 0 ? 'Credito' : 'Pagada';
+
                 $order = Order::create([
                     'client_id'               => $finalClientId,
                     'user_id'                 => auth()->id() ?? 1,
                     'order_date'              => now(),
-                    'estimated_delivery_date' => in_array($this->order_type, ['Produccion', 'Mixto'])
-                        ? $this->delivery_date
-                        : now(),
-                    'type'            => $this->order_type,
-                    'status'          => $orderStatus,
-                    'estimated_price' => $this->total,
-                    'advance_payment' => $actualPayment,
+                    'estimated_delivery_date' => in_array($this->order_type, ['Produccion', 'Mixto']) ? $this->delivery_date : now(),
+                    'type'                    => $this->order_type,
+                    'status'                  => $orderStatus,
+                    'estimated_price'         => $this->total,
+                    'advance_payment'         => $actualPayment,
                 ]);
 
                 $invoice = Invoice::create([
@@ -259,6 +239,7 @@ new class extends Component {
                     'total'          => $this->total,
                     'status'         => $invoiceStatus,
                 ]);
+
                 foreach ($this->cart as $item) {
                     $itemData = [
                         'product_id'   => $item['id'],
@@ -273,11 +254,11 @@ new class extends Component {
                     OrderItem::create(array_merge(['order_id' => $order->id], $itemData));
                     InvoiceItem::create(array_merge(['invoice_id' => $invoice->id], $itemData));
 
-                    // Descontar stock solo a productos de entrega inmediata
-                    if ($item['type'] === 'Producto' && ! $item['requires_production']) {
+                    if ($item['type'] === 'Producto' && !$item['requires_production']) {
                         Product::where('id', $item['id'])->decrement('stock', $item['quantity']);
                     }
                 }
+
                 if ($this->hasProductionItems) {
                     Production::create([
                         'order_id' => $order->id,
@@ -285,6 +266,7 @@ new class extends Component {
                         'status'   => 'Pendiente',
                     ]);
                 }
+
                 if ($actualPayment > 0) {
                     $register = CashRegister::where('user_id', auth()->id() ?? 1)
                         ->where('status', 'Abierta')
@@ -296,13 +278,12 @@ new class extends Component {
                     }
                 }
             });
-            $successMsg = match ($this->order_type) {
-                'Mixto'     => '✨ ¡Venta mixta procesada! La parte del taller quedó en producción.',
-                'Produccion'=> '✨ ¡Pedido de taller registrado!',
-                default     => '✨ ¡Venta procesada!',
-            };
 
-            session()->flash('success', $successMsg);
+            session()->flash('success', match ($this->order_type) {
+                'Mixto'      => '✨ ¡Venta mixta procesada! La parte del taller quedó en producción.',
+                'Produccion' => '✨ ¡Pedido de taller registrado!',
+                default      => '✨ ¡Venta procesada!',
+            });
 
             $this->reset([
                 'cart', 'client_id', 'selectedClient',
@@ -335,6 +316,7 @@ new class extends Component {
                     NUEVO ITEM
                 </button>
             </div>
+
             <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
                 @foreach($products as $product)
                     <button wire:click="addToCart({{ $product->id }})" class="bg-white p-4 rounded-xl border border-transparent hover:border-indigo-500 hover:shadow-md transition text-left group relative overflow-hidden">
@@ -408,6 +390,7 @@ new class extends Component {
                 </table>
             </div>
         </div>
+
         <div class="lg:col-span-4">
             <div class="bg-white rounded-xl shadow-lg border border-gray-200 p-5 space-y-5 sticky top-4">
                 <div class="bg-gray-50 p-4 rounded-xl border border-gray-100">
@@ -419,6 +402,7 @@ new class extends Component {
                         @endforeach
                     </select>
                 </div>
+
                 <div class="grid grid-cols-2 gap-3">
                     <div>
                         <label class="text-[10px] font-bold text-gray-400 uppercase mb-1 block">Modo de Venta</label>
@@ -441,6 +425,7 @@ new class extends Component {
                         </div>
                     @endif
                 </div>
+
                 @if($is_mixed)
                     <div class="bg-orange-50 border border-orange-200 rounded-xl p-4">
                         <div class="flex items-center gap-2 mb-3">
@@ -476,13 +461,13 @@ new class extends Component {
                                 <p class="text-xs font-bold text-gray-700">Pagar factura completa</p>
                                 <p class="text-[9px] text-gray-400">El cliente cancela todo ahora</p>
                             </div>
-                            <div class="w-9 h-5 rounded-full transition-colors flex items-center px-0.5
-                                        {{ $pay_full ? 'bg-indigo-600 justify-end' : 'bg-gray-200 justify-start' }}">
+                            <div class="w-9 h-5 rounded-full transition-colors flex items-center px-0.5 {{ $pay_full ? 'bg-indigo-600 justify-end' : 'bg-gray-200 justify-start' }}">
                                 <div class="w-4 h-4 bg-white rounded-full shadow"></div>
                             </div>
                         </div>
                     </div>
                 @endif
+
                 <div class="bg-indigo-900 rounded-xl p-5 text-white shadow-md">
                     <div class="space-y-1">
                         <div class="flex justify-between text-[10px] opacity-70 uppercase font-bold tracking-widest">
@@ -499,8 +484,8 @@ new class extends Component {
                         </div>
                     </div>
                 </div>
-                <div class="bg-white border-2 border-dashed border-gray-200 rounded-xl p-4 space-y-4">
 
+                <div class="bg-white border-2 border-dashed border-gray-200 rounded-xl p-4 space-y-4">
                     @if($is_mixed)
                         <div>
                             <label class="text-[10px] font-black text-orange-600 uppercase mb-2 block">
@@ -510,11 +495,9 @@ new class extends Component {
                                 <span class="absolute left-3 top-3 text-gray-400 font-bold">C$</span>
                                 <input type="number"
                                        wire:model.live="received_amount"
-                                       min="{{ $minimum_payment }}"
+                                       min="0"
                                        max="{{ $total }}"
-                                       @if($pay_full) readonly @endif
-                                       class="w-full border-gray-200 rounded-lg pl-10 text-2xl font-black text-gray-800 focus:ring-orange-400
-                                              {{ $pay_full ? 'bg-gray-50 cursor-not-allowed' : '' }}">
+                                       class="w-full border-gray-200 rounded-lg pl-10 text-2xl font-black text-gray-800 focus:ring-orange-400 {{ $pay_full ? 'bg-gray-50 cursor-not-allowed' : '' }}">
                             </div>
                         </div>
                         @php $pending = max(0, $total - $received_amount); @endphp
@@ -530,7 +513,6 @@ new class extends Component {
                                 <span class="text-xl font-black text-green-700">C$ {{ number_format($change_amount, 2) }}</span>
                             </div>
                         @endif
-
                     @else
                         <div>
                             <label class="text-[10px] font-black text-indigo-600 uppercase mb-2 block">
@@ -541,7 +523,6 @@ new class extends Component {
                                 <input type="number" wire:model.live="received_amount" class="w-full border-gray-200 rounded-lg pl-10 text-2xl font-black text-gray-800 focus:ring-indigo-500">
                             </div>
                         </div>
-
                         @if($order_type === 'Rapido')
                             <div class="flex justify-between items-center bg-green-50 p-3 rounded-lg border border-green-100">
                                 <span class="text-[10px] font-bold text-green-600 uppercase">Cambio:</span>
@@ -550,34 +531,33 @@ new class extends Component {
                         @endif
                     @endif
                 </div>
-                @php
-                    $isDisabled = match(true) {
-                        $is_mixed     => $received_amount < $minimum_payment,
-                        $order_type === 'Rapido' => $received_amount < $total,
-                        default       => false,
-                    };
 
+                @php
+                    $recv       = (float) $received_amount;
+                    $isDisabled = match(true) {
+                        $is_mixed            => $recv <= 0,
+                        $order_type === 'Rapido' => $recv < (float) $total,
+                        default              => false,
+                    };
                     $btnLabel = match(true) {
-                        $is_mixed && $pay_full  => 'PROCESAR VENTA MIXTA (PAGADA)',
-                        $is_mixed               => 'PROCESAR VENTA MIXTA',
+                        $is_mixed && $pay_full       => 'PROCESAR VENTA MIXTA (PAGADA)',
+                        $is_mixed                    => 'PROCESAR VENTA MIXTA',
                         $order_type === 'Produccion' => 'PROCESAR PEDIDO TALLER',
-                        default                 => 'FINALIZAR VENTA',
+                        default                      => 'FINALIZAR VENTA',
                     };
                 @endphp
 
                 <button wire:click="saveAll"
                         @if($isDisabled) disabled @endif
                         class="w-full py-4 rounded-xl font-black text-white shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2
-                               {{ $isDisabled
-                                   ? 'bg-gray-300 cursor-not-allowed'
-                                   : ($is_mixed ? 'bg-orange-500 hover:bg-orange-600' : 'bg-indigo-600 hover:bg-indigo-700') }}">
+                               {{ $isDisabled ? 'bg-gray-300 cursor-not-allowed' : ($is_mixed ? 'bg-orange-500 hover:bg-orange-600' : 'bg-indigo-600 hover:bg-indigo-700') }}">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
                     {{ $btnLabel }}
                 </button>
-
             </div>
         </div>
     </div>
+
     <x-modal wire:model="showProductModal" title="Registro de Producto o Servicio" separator>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div class="md:col-span-2">
