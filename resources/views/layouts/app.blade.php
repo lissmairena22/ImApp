@@ -68,7 +68,6 @@
                 <x-menu-sub title="Inventario" icon="o-archive-box">
                     <x-menu-item title="Productos/Materiales" icon="o-square-3-stack-3d" link="/productos" />
                     <x-menu-item title="Compras/Insumos" icon="o-truck" link="/compras" />
-                    {{-- Nuevo ítem de Proveedores --}}
                     <x-menu-item title="Proveedores" icon="o-building-office-2" link="/proveedores" />
                 </x-menu-sub>
 
@@ -76,6 +75,9 @@
                 <x-menu-sub title="Configuración" icon="o-cog-8-tooth">
                     <x-menu-item title="Usuarios" icon="o-users" link="/usuarios" />
                     <x-menu-item title="Cajas y Turnos" icon="o-calculator" link="/cajas" />
+                    <x-menu-item title="Arqueo de Caja" icon="o-banknotes" link="{{ route('arqueo') }}" />
+                    <x-menu-item title="Egresos" icon="o-banknotes" link="{{ route('egresos') }}" />
+
                     <x-menu-item title="Mantenimiento" icon="o-wrench-screwdriver" link="{{ route('mantenimiento') }}" />
                 </x-menu-sub>
 
@@ -89,7 +91,6 @@
         </x-slot:content>
     </x-main>
 
-    {{-- Notificaciones --}}
     <x-toast />
 </body>
 </html>

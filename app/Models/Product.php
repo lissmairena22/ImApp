@@ -21,6 +21,14 @@ class Product extends Model
         return $this->type === 'Servicio' && ($this->estimated_production_time > 0);
     }
 
+    // Relación: Un Servicio contiene muchos Materiales (Productos físicos)
+    public function materiales()
+    {
+        return $this->belongsToMany(Product::class, 'service_materials', 'service_id', 'material_id')
+                    ->withPivot('quantity')
+                    ->withTimestamps();
+    }
+
     // Relaciones
     public function categoria() { return $this->belongsTo(Category::class, 'category_id'); }
     public function unidad() { return $this->belongsTo(Unit::class, 'unit_id'); }

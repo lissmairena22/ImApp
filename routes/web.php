@@ -19,6 +19,7 @@ Route::middleware(['auth'])->group(function () {
     Volt::route('/devoluciones', 'pages.devoluciones')->name('devoluciones');
     Volt::route('/credito', 'pages.credito')->name('credito');
     Volt::route('/arqueo', 'pages.arqueo')->name('arqueo');
+    Volt::route('/egresos', 'pages.egresos')->name('egresos');
 
     // Catálogos / Mantenimiento
     Volt::route('/clientes', 'pages.clientes')->name('clientes');
