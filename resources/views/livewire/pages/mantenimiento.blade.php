@@ -171,7 +171,7 @@ new class extends Component {
                 Genera un punto de restauración actual y lo guarda directamente en el historial del sistema.
             </div>
             <x-slot:actions>
-                <x-button label="Generar Punto" icon="o-plus" class="btn-primary w-full" wire:click="backupDatabase" spinner="backupDatabase" />
+                <x-button label="Generar respaldo" icon="o-plus" class="btn-primary w-full" wire:click="backupDatabase" spinner="backupDatabase" />
             </x-slot:actions>
         </x-card>
 
@@ -184,7 +184,7 @@ new class extends Component {
             </x-slot:actions>
         </x-card>
 
-       
+
     </div>
 
     <x-card title="Historial de Puntos de Restauración" subtitle="Selecciona una versión anterior para regresar el tiempo del sistema" icon="o-clock">
