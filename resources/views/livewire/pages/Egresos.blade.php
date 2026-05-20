@@ -9,14 +9,11 @@ use Illuminate\Support\Facades\DB;
 new class extends Component {
     use Toast;
 
-    // Propiedades del formulario
     public string $concept = '';
     public $amount;
 
-    // Registrar el egreso en la base de datos
     public function saveExpense()
     {
-        // 1. Buscar si hay una caja abierta actualmente
         $activeRegister = DB::table('cash_registers')->where('status', 'abierta')->first();
 
         if (!$activeRegister) {
@@ -24,7 +21,6 @@ new class extends Component {
             return;
         }
 
-        // 2. Validar los campos
         $this->validate([
             'concept' => 'required|string|max:255|min:5',
             'amount' => 'required|numeric|min:1',
@@ -35,7 +31,6 @@ new class extends Component {
             'amount.min' => 'El monto debe ser mayor a C$ 0.'
         ]);
 
-        // 3. Insertar el movimiento en la tabla cash_movements
         DB::table('cash_movements')->insert([
             'cash_register_id' => $activeRegister->id,
             'user_id' => auth()->id() ?: 1, // Usa el ID del usuario logueado o 1 por defecto
@@ -51,7 +46,6 @@ new class extends Component {
         $this->reset(['concept', 'amount']);
     }
 
-    // Eliminar un egreso por si el cajero se equivocó de número
     public function deleteExpense($id)
     {
         DB::table('cash_movements')->where('id', $id)->delete();
@@ -60,7 +54,6 @@ new class extends Component {
 
     public function with(): array
     {
-        // Buscar caja activa para filtrar los egresos de este turno
         $activeRegister = DB::table('cash_registers')->where('status', 'abierta')->first();
 
         $expenses = [];
