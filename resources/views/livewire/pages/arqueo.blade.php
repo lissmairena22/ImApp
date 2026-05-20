@@ -12,7 +12,7 @@ new class extends Component {
     public float $total_incomes = 0.00;
     public float $total_expenses = 0.00;
 
-    public $exchange_rate = 36.65;
+    public $exchange_rate = 36.5;
     public string $notes = '';
 
     // Arreglo para Billetes y Monedas Locales (Córdobas/Pesos)
