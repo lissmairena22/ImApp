@@ -14,7 +14,10 @@ new class extends Component {
 
     public function saveExpense()
     {
-        $activeRegister = DB::table('cash_registers')->where('status', 'abierta')->first();
+        $activeRegister = DB::table('cash_registers')
+            ->where('user_id', auth()->id())
+            ->where('status', 'Abierta')
+            ->first();
 
         if (!$activeRegister) {
             $this->error('No puedes registrar egresos porque no hay ninguna caja abierta actualmente.');
@@ -31,16 +34,24 @@ new class extends Component {
             'amount.min' => 'El monto debe ser mayor a C$ 0.'
         ]);
 
-        DB::table('cash_movements')->insert([
-            'cash_register_id' => $activeRegister->id,
-            'user_id' => auth()->id() ?: 1, // Usa el ID del usuario logueado o 1 por defecto
-            'type' => 'Egreso',
-            'concept' => $this->concept,
-            'amount' => $this->amount,
-            'movement_date' => now(),
-            'created_at' => now(),
-            'updated_at' => now(),
-        ]);
+        DB::transaction(function () use ($activeRegister) {
+            DB::table('cash_movements')->insert([
+                'cash_register_id' => $activeRegister->id,
+                'user_id' => auth()->id() ?: 1,
+                'type' => 'Egreso',
+                'concept' => $this->concept,
+                'amount' => $this->amount,
+                'movement_date' => now(),
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+
+            DB::table('cash_registers')->where('id', $activeRegister->id)->update([
+                'cash_out' => DB::raw('cash_out + ' . (float) $this->amount),
+                'system_balance' => DB::raw('system_balance - ' . (float) $this->amount),
+                'updated_at' => now(),
+            ]);
+        });
 
         $this->success('Egreso registrado correctamente y descontado de la caja.');
         $this->reset(['concept', 'amount']);
@@ -48,13 +59,38 @@ new class extends Component {
 
     public function deleteExpense($id)
     {
-        DB::table('cash_movements')->where('id', $id)->delete();
+        $expense = DB::table('cash_movements')
+            ->join('cash_registers', 'cash_registers.id', '=', 'cash_movements.cash_register_id')
+            ->where('cash_movements.id', $id)
+            ->where('cash_movements.type', 'Egreso')
+            ->where('cash_registers.user_id', auth()->id())
+            ->where('cash_registers.status', 'Abierta')
+            ->select('cash_movements.*')
+            ->first();
+
+        if (!$expense) {
+            $this->error('Egreso no encontrado.');
+            return;
+        }
+
+        DB::transaction(function () use ($expense) {
+            DB::table('cash_movements')->where('id', $expense->id)->delete();
+            DB::table('cash_registers')->where('id', $expense->cash_register_id)->update([
+                'cash_out' => DB::raw('cash_out - ' . (float) $expense->amount),
+                'system_balance' => DB::raw('system_balance + ' . (float) $expense->amount),
+                'updated_at' => now(),
+            ]);
+        });
+
         $this->success('Egreso eliminado del sistema.');
     }
 
     public function with(): array
     {
-        $activeRegister = DB::table('cash_registers')->where('status', 'abierta')->first();
+        $activeRegister = DB::table('cash_registers')
+            ->where('user_id', auth()->id())
+            ->where('status', 'Abierta')
+            ->first();
 
         $expenses = [];
         $totalExpenses = 0;

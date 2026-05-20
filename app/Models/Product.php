@@ -12,7 +12,8 @@ class Product extends Model
     protected $fillable = [
         'category_id', 'unit_id', 'name', 'type',
         'sale_price', 'cost_price', 'stock', 'min_stock',
-        'manage_stock', 'estimated_production_time', 'is_active'
+        'manage_stock', 'estimated_production_time', 'is_active',
+        'is_sellable'
     ];
 
 
@@ -33,4 +34,3 @@ class Product extends Model
     public function categoria() { return $this->belongsTo(Category::class, 'category_id'); }
     public function unidad() { return $this->belongsTo(Unit::class, 'unit_id'); }
 }
-

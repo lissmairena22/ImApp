@@ -46,7 +46,10 @@ new class extends Component {
             return;
         }
 
-        $activeRegister = DB::table('cash_registers')->where('status', 'abierta')->first();
+        $activeRegister = DB::table('cash_registers')
+            ->where('user_id', auth()->id())
+            ->where('status', 'Abierta')
+            ->first();
 
         if ($activeRegister) {
             DB::table('cash_registers')->where('id', $activeRegister->id)->update([
@@ -56,7 +59,7 @@ new class extends Component {
                 'system_balance' => $this->system_balance,
                 'physical_balance' => $physical_balance,
                 'difference' => $difference,
-                'status' => 'cerrada',
+                'status' => 'Cerrada',
                 'notes' => $this->notes,
                 'updated_at' => now()
             ]);
@@ -105,23 +108,20 @@ new class extends Component {
     public function with(): array
     {
 
-        $activeRegister = DB::table('cash_registers')->where('status', 'abierta')->first();
+        $activeRegister = DB::table('cash_registers')
+            ->where('user_id', auth()->id())
+            ->where('status', 'Abierta')
+            ->first();
 
         if ($activeRegister) {
             // 2. Cargamos dinámicamente el monto con el que abrieron la caja (Apertura)
             $this->initial_balance = (float)$activeRegister->initial_balance;
 
             // 3. Sumamos los ingresos (ventas, anticipos, cancelaciones) vinculados a esta caja
-            $this->total_incomes = DB::table('cash_movements')
-                ->where('cash_register_id', $activeRegister->id)
-                ->whereIn('type', ['Ingreso', 'Abono'])
-                ->sum('amount');
+            $this->total_incomes = (float) $activeRegister->cash_sales;
 
             // 4. Sumamos los egresos (gastos rápidos de caja) vinculados a esta caja
-            $this->total_expenses = DB::table('cash_movements')
-                ->where('cash_register_id', $activeRegister->id)
-                ->where('type', 'Egreso')
-                ->sum('amount');
+            $this->total_expenses = (float) $activeRegister->cash_out;
         } else {
             // Si no hay ninguna caja abierta en el sistema, todo se mantiene en cero
             $this->initial_balance = 0.00;

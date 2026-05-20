@@ -1,123 +1,170 @@
 <?php
 
 use Livewire\Volt\Component;
-use App\Models\{Invoice, Devolution, Product, CashRegister};
+use App\Models\{Invoice, Devolution, DevolutionItem, Product, CashRegister};
 use Illuminate\Support\Facades\DB;
+use Mary\Traits\Toast;
 
 new class extends Component {
+    use Toast;
+
     public string $searchInvoice = '';
     public $suggestions = [];
     public $invoice = null;
     public array $items = [];
     public string $reason = '';
     public float $totalToReturn = 0;
+    public float $invoiceFactor = 1;
+    public bool $canRestoreServiceMaterials = false;
 
-    // 1. Sugerencias: Filtramos solo las que están 'Pagada'
-    public function updatedSearchInvoice($value)
+    public function updatedSearchInvoice($value): void
     {
         $term = trim($value);
+
         if (strlen($term) < 2) {
             $this->suggestions = [];
             return;
         }
 
-        // Solo mostramos facturas PAGADAS para evitar errores desde la búsqueda
         $this->suggestions = Invoice::where('invoice_number', 'LIKE', "%{$term}%")
             ->where('status', 'Pagada')
             ->limit(5)
             ->get(['id', 'invoice_number', 'total']);
     }
 
-    public function selectInvoice($number)
+    public function selectInvoice($number): void
     {
         $this->searchInvoice = $number;
         $this->suggestions = [];
         $this->findInvoice();
     }
 
-    // 2. Búsqueda con validación estricta de Producción
-    public function findInvoice() {
+    public function findInvoice(): void
+    {
         $this->suggestions = [];
         $term = trim($this->searchInvoice);
 
         if (empty($term)) {
-            session()->flash('error', '⚠️ Ingrese un número de factura.');
+            $this->error('Ingrese un numero de factura.', position: 'toast-top toast-center');
             return;
         }
 
-        $this->invoice = null;
-        $this->items = [];
-        $this->totalToReturn = 0;
+        $this->reset(['invoice', 'items', 'totalToReturn']);
+        $this->invoiceFactor = 1;
+        $this->canRestoreServiceMaterials = false;
 
-        // Buscamos la factura incluyendo la relación 'order' (tabla orders)
-        $foundInvoice = Invoice::with(['items.product', 'client', 'order'])
+        $foundInvoice = Invoice::with([
+                'items.product.unidad',
+                'items.materialConsumptions.material',
+                'items.devolutionItems',
+                'client',
+                'order',
+            ])
             ->where('invoice_number', $term)
             ->first();
 
         if (!$foundInvoice) {
-            session()->flash('error', '❌ Factura no encontrada.');
+            $this->error('Factura no encontrada.', position: 'toast-top toast-center');
             return;
         }
 
-        // VALIDACIÓN 1: Debe estar pagada
         if ($foundInvoice->status !== 'Pagada') {
-            session()->flash('error', '❌ No se puede reembolsar: La factura está en estado "' . $foundInvoice->status . '".');
+            $this->error('No se puede reembolsar: la factura esta en estado "' . $foundInvoice->status . '".', position: 'toast-top toast-center');
             return;
         }
 
-        // VALIDACIÓN 2: Si tiene orden, no debe estar en producción/pendiente
-        // Según tu BD: enum('Pendiente','EnProceso','Terminado','Entregado','Cancelado')
-        if ($foundInvoice->order_id) {
-            $statusProhibidos = ['Pendiente', 'EnProceso'];
-            if (in_array($foundInvoice->order->status, $statusProhibidos)) {
-                session()->flash('error', '❌ No se puede reembolsar: El pedido asociado está "' . $foundInvoice->order->status . '". Debe estar terminado.');
-                return;
-            }
+        if ($foundInvoice->order_id && $foundInvoice->order?->status === 'EnProceso') {
+            $this->error('No se puede reembolsar desde aqui: el pedido esta en produccion.', position: 'toast-top toast-center');
+            return;
         }
 
         $this->invoice = $foundInvoice;
+        $this->invoiceFactor = $this->invoiceFactorFor($foundInvoice);
+        $this->canRestoreServiceMaterials = $foundInvoice->order_id
+            && in_array($foundInvoice->order?->status, ['Pendiente', 'Parcial']);
 
         foreach ($this->invoice->items as $item) {
+            $returnedQty = (float) $item->devolutionItems->sum('quantity');
+            $remainingQty = max(0, (float) $item->quantity - $returnedQty);
+
+            if ($remainingQty <= 0) {
+                continue;
+            }
+
+            $type = $item->product->type ?? 'Servicio';
+
             $this->items[$item->id] = [
                 'id' => $item->id,
                 'product_id' => $item->product_id,
                 'description' => $item->description,
-                'max_qty' => (int)$item->quantity,
+                'max_qty' => $remainingQty,
+                'original_qty' => (float) $item->quantity,
+                'already_returned' => $returnedQty,
                 'qty_to_return' => 0,
-                'unit_price' => (float)$item->unit_price,
-                'type' => $item->product->type ?? 'Servicio',
+                'unit_price' => (float) $item->unit_price,
+                'gross_unit_price' => round((float) $item->unit_price * $this->invoiceFactor, 2),
+                'type' => $type,
+                'unit' => $item->product->unidad->name ?? 'Und',
+                'return_to_stock' => $type === 'Producto',
+                'restore_materials' => $type === 'Servicio' && $this->canRestoreServiceMaterials,
+                'materials' => $item->materialConsumptions
+                    ->map(fn($material) => [
+                        'name' => $material->material_name,
+                        'unit' => $material->unit_name ?? 'Und',
+                        'total_consumed' => (float) $material->total_consumed,
+                    ])
+                    ->values()
+                    ->all(),
             ];
+        }
+
+        if (empty($this->items)) {
+            $this->invoice = null;
+            $this->error('Esta factura ya no tiene unidades disponibles para devolver.', position: 'toast-top toast-center');
         }
     }
 
-    public function updatedItems() {
+    public function updatedItems(): void
+    {
         $this->calculateTotal();
     }
 
-    private function calculateTotal() {
-        $this->totalToReturn = collect($this->items)->sum(function($item) {
-            $qty = (int)$item['qty_to_return'];
-            if($qty > $item['max_qty']) return 0;
-            return $qty * $item['unit_price'];
-        });
+    private function calculateTotal(): void
+    {
+        $this->totalToReturn = round(collect($this->items)->sum(function ($item) {
+            $qty = (float) $item['qty_to_return'];
+
+            if ($qty < 0 || $qty > (float) $item['max_qty']) {
+                return 0;
+            }
+
+            return $qty * (float) $item['gross_unit_price'];
+        }), 2);
     }
 
-    public function processDevolution() {
-        if ($this->totalToReturn <= 0 || empty($this->reason)) {
-            session()->flash('error', '⚠️ Indique una cantidad válida y el motivo.');
+    public function processDevolution(): void
+    {
+        $this->calculateTotal();
+
+        if ($this->totalToReturn <= 0 || trim($this->reason) === '') {
+            $this->error('Indique una cantidad valida y el motivo.', position: 'toast-top toast-center');
             return;
         }
 
-        // RE-VALIDACIÓN DE SEGURIDAD ANTES DE PROCESAR
+        if (!$this->quantitiesAreValid()) {
+            return;
+        }
+
         $this->invoice->refresh();
-        if($this->invoice->status !== 'Pagada'){
-            session()->flash('error', '❌ La factura ya no es apta para devolución.');
+
+        if ($this->invoice->status !== 'Pagada') {
+            $this->error('La factura ya no es apta para devolucion.', position: 'toast-top toast-center');
             return;
         }
 
         try {
             DB::transaction(function () {
-                Devolution::create([
+                $devolution = Devolution::create([
                     'invoice_id' => $this->invoice->id,
                     'user_id' => auth()->id() ?? 1,
                     'devolution_date' => now(),
@@ -126,72 +173,151 @@ new class extends Component {
                 ]);
 
                 foreach ($this->items as $item) {
-                    if ($item['qty_to_return'] > 0) {
-                        if ($item['type'] === 'Producto' && !empty($item['product_id'])) {
-                            Product::where('id', $item['product_id'])->increment('stock', $item['qty_to_return']);
-                        }
+                    $qty = (float) $item['qty_to_return'];
+
+                    if ($qty <= 0) {
+                        continue;
                     }
-                }
 
-                $openRegister = CashRegister::where('user_id', auth()->id() ?? 1)
-                    ->where('status', 'Abierta')
-                    ->first();
+                    $returnedToStock = $this->restoreProductStock($item, $qty);
+                    $materialsRestored = $this->restoreServiceMaterials($item, $qty);
 
-                if ($openRegister) {
-                    $openRegister->decrement('system_balance', $this->totalToReturn);
-                    $openRegister->increment('cash_out', $this->totalToReturn);
-
-                    // También registrar el movimiento en cash_movements para el historial
-                    DB::table('cash_movements')->insert([
-                        'cash_register_id' => $openRegister->id,
-                        'user_id' => auth()->id() ?? 1,
-                        'type' => 'Egreso',
-                        'concept' => 'Devolución Factura: ' . $this->invoice->invoice_number,
-                        'amount' => $this->totalToReturn,
-                        'movement_date' => now(),
-                        'created_at' => now(),
-                        'updated_at' => now(),
+                    DevolutionItem::create([
+                        'devolution_id' => $devolution->id,
+                        'invoice_item_id' => $item['id'],
+                        'product_id' => $item['product_id'],
+                        'description' => $item['description'],
+                        'quantity' => $qty,
+                        'unit_price' => $item['unit_price'],
+                        'amount_returned' => round($qty * (float) $item['gross_unit_price'], 2),
+                        'returned_to_stock' => $returnedToStock,
+                        'materials_restored' => $materialsRestored,
                     ]);
                 }
 
-                // Si la devolución es total, anulamos la factura
-                if ($this->totalToReturn >= (float)$this->invoice->total) {
+                $this->registerCashOut();
+
+                if ($this->isFullReturn()) {
                     $this->invoice->update(['status' => 'Anulada']);
+                    $this->invoice->order?->update(['status' => 'Cancelado']);
                 }
             });
 
-            session()->flash('success', '✨ Devolución procesada con éxito.');
+            $this->success('Devolucion procesada con exito.', position: 'toast-top toast-center');
             $this->reset(['invoice', 'items', 'searchInvoice', 'totalToReturn', 'reason', 'suggestions']);
-
+            $this->invoiceFactor = 1;
+            $this->canRestoreServiceMaterials = false;
         } catch (\Exception $e) {
-            session()->flash('error', '❌ Error: ' . $e->getMessage());
+            $this->error('Error: ' . $e->getMessage(), position: 'toast-top toast-center');
         }
+    }
+
+    private function invoiceFactorFor(Invoice $invoice): float
+    {
+        $subtotal = max((float) $invoice->subtotal, 0.01);
+        return round((float) $invoice->total / $subtotal, 6);
+    }
+
+    private function quantitiesAreValid(): bool
+    {
+        foreach ($this->items as $item) {
+            $qty = (float) $item['qty_to_return'];
+
+            if ($qty < 0 || $qty > (float) $item['max_qty']) {
+                $this->error("Cantidad invalida para {$item['description']}. Maximo: {$item['max_qty']}.", position: 'toast-top toast-center');
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function restoreProductStock(array $item, float $qty): bool
+    {
+        if ($item['type'] !== 'Producto' || empty($item['product_id']) || empty($item['return_to_stock'])) {
+            return false;
+        }
+
+        Product::where('id', $item['product_id'])->lockForUpdate()->increment('stock', $qty);
+        return true;
+    }
+
+    private function restoreServiceMaterials(array $item, float $qty): bool
+    {
+        if ($item['type'] !== 'Servicio' || empty($item['restore_materials'])) {
+            return false;
+        }
+
+        $invoiceItem = $this->invoice->items->firstWhere('id', $item['id']);
+
+        if (!$invoiceItem || (float) $invoiceItem->quantity <= 0) {
+            return false;
+        }
+
+        $ratio = $qty / (float) $invoiceItem->quantity;
+        $restored = false;
+
+        foreach ($invoiceItem->materialConsumptions as $materialUse) {
+            if (!$materialUse->material_id) {
+                continue;
+            }
+
+            $restoreQty = round((float) $materialUse->total_consumed * $ratio, 2);
+
+            if ($restoreQty > 0) {
+                Product::where('id', $materialUse->material_id)->lockForUpdate()->increment('stock', $restoreQty);
+                $restored = true;
+            }
+        }
+
+        return $restored;
+    }
+
+    private function registerCashOut(): void
+    {
+        $openRegister = CashRegister::where('user_id', auth()->id() ?? 1)
+            ->where('status', 'Abierta')
+            ->first();
+
+        if (!$openRegister) {
+            throw new \Exception('No hay caja abierta para registrar la salida del reembolso.');
+        }
+
+        if ((float) $openRegister->system_balance < $this->totalToReturn) {
+            throw new \Exception('La caja no tiene saldo suficiente para este reembolso.');
+        }
+
+        $openRegister->decrement('system_balance', $this->totalToReturn);
+        $openRegister->increment('cash_out', $this->totalToReturn);
+
+        DB::table('cash_movements')->insert([
+            'cash_register_id' => $openRegister->id,
+            'user_id' => auth()->id() ?? 1,
+            'type' => 'Egreso',
+            'concept' => 'Devolucion Factura: ' . $this->invoice->invoice_number,
+            'amount' => $this->totalToReturn,
+            'movement_date' => now(),
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+    }
+
+    private function isFullReturn(): bool
+    {
+        $remainingAfterReturn = collect($this->items)->sum(function ($item) {
+            return max(0, (float) $item['max_qty'] - (float) $item['qty_to_return']);
+        });
+
+        return $remainingAfterReturn <= 0;
     }
 }; ?>
 
 <div class="p-6 bg-gray-100 min-h-screen font-sans">
     <div class="max-w-6xl mx-auto space-y-6">
-
-        {{-- Alertas --}}
-        @if (session()->has('success'))
-            <div class="p-4 bg-emerald-500 text-white rounded-xl shadow-lg font-bold flex items-center animate-bounce">
-                <svg class="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                {{ session('success') }}
-            </div>
-        @endif
-
-        @if (session()->has('error'))
-            <div class="p-4 bg-rose-500 text-white rounded-xl shadow-lg font-bold flex items-center">
-                <svg class="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                {{ session('error') }}
-            </div>
-        @endif
-
-        {{-- Buscador Principal --}}
         <div class="bg-white p-8 rounded-2xl shadow-sm border border-gray-200">
             <div class="mb-6">
-                <h2 class="text-2xl font-black text-gray-800 uppercase tracking-tight">Módulo de Devoluciones</h2>
-                <p class="text-gray-500 text-sm">Busca una factura para realizar una devolución parcial o total.</p>
+                <h2 class="text-2xl font-black text-gray-800 uppercase tracking-tight">Modulo de Devoluciones</h2>
+                <p class="text-gray-500 text-sm">Busca una factura para realizar una devolucion parcial o total.</p>
             </div>
 
             <div class="relative">
@@ -203,14 +329,13 @@ new class extends Component {
                            wire:model.live.debounce.300ms="searchInvoice"
                            wire:keydown.enter="findInvoice"
                            class="flex-1 bg-transparent border-none focus:ring-0 text-lg font-medium"
-                           placeholder="Escriba el número de factura (Ej: FAC-102)...">
+                           placeholder="Escriba el numero de factura (Ej: FAC-102)...">
                     <button wire:click="findInvoice"
                             class="bg-indigo-600 text-white px-8 py-3 rounded-xl font-bold hover:bg-indigo-700 transition transform active:scale-95 shadow-md">
                         BUSCAR
                     </button>
                 </div>
 
-                {{-- Dropdown de Sugerencias --}}
                 @if(!empty($suggestions))
                     <div class="absolute z-50 w-full mt-2 bg-white border border-gray-200 rounded-xl shadow-2xl overflow-hidden border-t-4 border-t-indigo-500">
                         @foreach($suggestions as $suggestion)
@@ -228,16 +353,16 @@ new class extends Component {
             </div>
         </div>
 
-        {{-- Resultados de Factura --}}
         @if($invoice)
             <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-
-                {{-- Tabla de Items --}}
                 <div class="lg:col-span-8 bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
                     <div class="p-6 border-b bg-gray-50/50 flex justify-between items-center">
                         <div>
                             <p class="text-xs font-bold text-gray-400 uppercase">Factura seleccionada</p>
                             <h3 class="text-lg font-black text-indigo-900">{{ $invoice->invoice_number }}</h3>
+                            @if($invoice->order)
+                                <p class="text-[10px] text-gray-400 uppercase font-bold mt-1">Pedido: {{ $invoice->order->status }}</p>
+                            @endif
                         </div>
                         <div class="text-right">
                             <p class="text-xs font-bold text-gray-400 uppercase">Cliente</p>
@@ -248,10 +373,10 @@ new class extends Component {
                         <table class="w-full text-left">
                             <thead class="text-[10px] uppercase text-gray-400 font-black border-b bg-white">
                                 <tr>
-                                    <th class="px-6 py-4">Descripción</th>
-                                    <th class="px-6 py-4 text-center">Cant. Original</th>
-                                    <th class="px-6 py-4 text-center">A Devolver</th>
-                                    <th class="px-6 py-4 text-right">Subtotal</th>
+                                    <th class="px-6 py-4">Descripcion</th>
+                                    <th class="px-6 py-4 text-center">Disponible</th>
+                                    <th class="px-6 py-4 text-center">A devolver</th>
+                                    <th class="px-6 py-4 text-right">Reembolso</th>
                                 </tr>
                             </thead>
                             <tbody class="divide-y divide-gray-100">
@@ -259,19 +384,48 @@ new class extends Component {
                                     <tr class="hover:bg-gray-50/50 transition">
                                         <td class="px-6 py-5">
                                             <p class="font-bold text-gray-800">{{ $item['description'] }}</p>
-                                            <span class="inline-block px-2 py-0.5 rounded text-[10px] font-bold {{ $item['type'] == 'Producto' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700' }}">
-                                                {{ strtoupper($item['type']) }}
-                                            </span>
+                                            <div class="flex flex-wrap gap-1 mt-1">
+                                                <span class="inline-block px-2 py-0.5 rounded text-[10px] font-bold {{ $item['type'] == 'Producto' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700' }}">
+                                                    {{ strtoupper($item['type']) }}
+                                                </span>
+                                                @if($item['already_returned'] > 0)
+                                                    <span class="inline-block px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-600">
+                                                        Devuelto: {{ number_format($item['already_returned'], 2) }}
+                                                    </span>
+                                                @endif
+                                            </div>
+
+                                            @if($item['type'] === 'Producto')
+                                                <label class="mt-3 flex items-center gap-2 text-[11px] font-bold text-emerald-700">
+                                                    <input type="checkbox" wire:model.live="items.{{ $id }}.return_to_stock" class="rounded border-gray-300 text-emerald-600 focus:ring-emerald-500">
+                                                    Reintegrar al inventario
+                                                </label>
+                                            @elseif(!empty($item['materials']))
+                                                <div class="mt-3 space-y-1">
+                                                    @foreach($item['materials'] as $material)
+                                                        <div class="text-[10px] text-gray-500 bg-gray-50 border border-gray-100 rounded px-2 py-1">
+                                                            Material usado: <b>{{ $material['name'] }}</b>
+                                                            ({{ number_format($material['total_consumed'], 2) }} {{ $material['unit'] }})
+                                                        </div>
+                                                    @endforeach
+                                                </div>
+                                                <label class="mt-2 flex items-center gap-2 text-[11px] font-bold {{ $canRestoreServiceMaterials ? 'text-indigo-700' : 'text-gray-400' }}">
+                                                    <input type="checkbox" wire:model.live="items.{{ $id }}.restore_materials" @disabled(!$canRestoreServiceMaterials) class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
+                                                    Reintegrar materiales no producidos
+                                                </label>
+                                            @endif
                                         </td>
-                                        <td class="px-6 py-5 text-center font-medium text-gray-500">{{ $item['max_qty'] }}</td>
+                                        <td class="px-6 py-5 text-center font-medium text-gray-500">
+                                            {{ number_format($item['max_qty'], 2) }} {{ $item['unit'] }}
+                                        </td>
                                         <td class="px-6 py-5 text-center">
                                             <input type="number"
                                                    wire:model.live="items.{{ $id }}.qty_to_return"
-                                                   max="{{ $item['max_qty'] }}" min="0"
-                                                   class="w-20 border-gray-200 rounded-lg text-center font-bold text-indigo-600 focus:ring-indigo-500">
+                                                   max="{{ $item['max_qty'] }}" min="0" step="0.01"
+                                                   class="w-24 border-gray-200 rounded-lg text-center font-bold text-indigo-600 focus:ring-indigo-500">
                                         </td>
                                         <td class="px-6 py-5 text-right font-black text-gray-700">
-                                            C$ {{ number_format($item['qty_to_return'] * $item['unit_price'], 2) }}
+                                            C$ {{ number_format((float) $item['qty_to_return'] * (float) $item['gross_unit_price'], 2) }}
                                         </td>
                                     </tr>
                                 @endforeach
@@ -280,28 +434,31 @@ new class extends Component {
                     </div>
                 </div>
 
-                {{-- Resumen y Confirmación --}}
                 <div class="lg:col-span-4 space-y-6">
                     <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-200 sticky top-6">
-                        <h3 class="font-black text-gray-800 uppercase text-sm mb-4 border-b pb-2">Finalizar Devolución</h3>
+                        <h3 class="font-black text-gray-800 uppercase text-sm mb-4 border-b pb-2">Finalizar Devolucion</h3>
 
                         <div class="space-y-4">
+                            <div class="p-3 bg-indigo-50 rounded-xl border border-indigo-100 text-xs text-indigo-700 font-medium">
+                                El reembolso se calcula proporcionalmente con IVA/descuento de la factura. Los servicios terminados no reintegran materiales, porque ya fueron consumidos por la imprenta.
+                            </div>
+
                             <div>
                                 <label class="block text-[10px] font-bold text-gray-400 uppercase mb-1">Motivo</label>
                                 <textarea wire:model="reason" rows="3"
                                           class="w-full border-gray-200 rounded-xl text-sm focus:ring-indigo-500 focus:border-indigo-500"
-                                          placeholder="Ej: Producto dañado..."></textarea>
+                                          placeholder="Ej: Cliente cancelo, error de impresion, producto danado..."></textarea>
                             </div>
 
                             <div class="p-4 bg-rose-50 rounded-xl border border-rose-100 text-center">
-                                <span class="block text-xs font-bold text-rose-700 uppercase mb-1">Monto Total a Reembolsar</span>
+                                <span class="block text-xs font-bold text-rose-700 uppercase mb-1">Monto total a reembolsar</span>
                                 <span class="text-3xl font-black text-rose-600 tracking-tighter">C$ {{ number_format($totalToReturn, 2) }}</span>
                             </div>
 
                             <button wire:click="processDevolution"
                                     wire:loading.attr="disabled"
                                     class="w-full bg-gray-900 hover:bg-black text-white font-black py-4 rounded-xl shadow-lg transition transform active:scale-95 disabled:opacity-50">
-                                <span wire:loading.remove italic>CONFIRMAR PROCESO</span>
+                                <span wire:loading.remove>CONFIRMAR PROCESO</span>
                                 <span wire:loading class="animate-pulse">CARGANDO...</span>
                             </button>
                         </div>

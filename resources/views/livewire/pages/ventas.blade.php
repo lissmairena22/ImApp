@@ -1,10 +1,13 @@
 <?php
 
 use Livewire\Volt\Component;
-use App\Models\{Product, Client, Invoice, InvoiceItem, Order, OrderItem, Production, CashRegister, Category, Unit};
+use App\Models\{Product, Client, Invoice, InvoiceItem, Order, OrderItem, OrderItemMaterial, Production, CashRegister, Category, Unit};
 use Illuminate\Support\Facades\DB;
+use Mary\Traits\Toast;
 
 new class extends Component {
+    use Toast;
+
     public $search = '';
     public $cart = [];
     public $client_id = '';
@@ -47,6 +50,10 @@ new class extends Component {
         return [
             'products' => Product::where('name', 'like', "%{$this->search}%")
                                 ->where('is_active', true)
+                                ->where(function ($query) {
+                                    $query->where('type', 'Servicio')
+                                          ->orWhere(fn($q) => $q->where('type', 'Producto')->where('is_sellable', true));
+                                })
                                 ->orderBy('id', 'desc')
                                 ->limit(8)->get(),
             'clients' => Client::where('is_active', true)->get(),
@@ -64,19 +71,9 @@ new class extends Component {
         if (isset($this->cart[$id])) {
             $this->cart[$id]['quantity']++;
         } else {
-            $this->cart[$id] = [
-                'id'                  => $id,
-                'name'                => $product->name,
-                'price'               => $product->sale_price,
-                'quantity'            => 1,
-                'type'                => $product->type,
-                'requires_production' => (bool) $product->requires_production,
-                'measurements'        => '',
-                'material'            => '',
-            ];
+            $this->cart[$id] = $this->cartItemFromProduct($product);
         }
-        $this->checkProductionRequirements();
-        $this->calculateTotals();
+        $this->refreshCartState();
     }
 
     public function saveNewProduct() {
@@ -98,18 +95,19 @@ new class extends Component {
             'unit_id'             => $this->new_unit_id,
             'is_active'           => true,
             'manage_stock'        => ($this->new_type === 'Producto'),
+            'is_sellable'         => ($this->new_type === 'Producto'),
+            'estimated_production_time' => $this->new_requires_production ? 1 : null,
         ]);
 
         $this->addToCart($product);
         $this->showProductModal = false;
         $this->reset(['new_name', 'new_price', 'new_type', 'new_requires_production', 'new_stock', 'new_category_id', 'new_unit_id']);
-        session()->flash('success', '✨ Item registrado y añadido.');
+        $this->success('Item registrado y añadido.', position: 'toast-top toast-center');
     }
 
     public function removeItem($id) {
         unset($this->cart[$id]);
-        $this->checkProductionRequirements();
-        $this->calculateTotals();
+        $this->refreshCartState();
     }
 
     public function checkProductionRequirements() {
@@ -187,7 +185,7 @@ new class extends Component {
         $this->received_amount = (float) $this->received_amount;
 
         if (empty($this->cart)) {
-            session()->flash('error', '⚠️ Carrito vacío');
+            $this->error('Carrito vacío', position: 'toast-top toast-center');
             return;
         }
 
@@ -195,12 +193,20 @@ new class extends Component {
             ?: Client::firstOrCreate(['name' => 'Cliente General'], ['phone' => '00000000'])->id;
 
         if ($this->order_type === 'Rapido' && $this->received_amount < $this->total) {
-            session()->flash('error', '❌ Pago insuficiente para factura rápida.');
+            $this->error('Pago insuficiente para factura rápida.', position: 'toast-top toast-center');
             return;
         }
 
         if ($this->is_mixed && $this->received_amount < $this->minimum_payment) {
-            session()->flash('error', '❌ Pago insuficiente. Mínimo requerido: C$ ' . number_format($this->minimum_payment, 2));
+            $this->error('Pago insuficiente. Mínimo requerido: C$ ' . number_format($this->minimum_payment, 2), position: 'toast-top toast-center');
+            return;
+        }
+
+        if (!$this->validateMaterialStock()) {
+            return;
+        }
+
+        if (!$this->validateProductStock()) {
             return;
         }
 
@@ -209,54 +215,22 @@ new class extends Component {
                 $actualPayment  = min($this->received_amount, $this->total);
                 $pendingBalance = $this->total - $actualPayment;
 
-                $orderStatus   = match ($this->order_type) {
-                    'Rapido'     => 'Entregado',
-                    'Produccion' => 'Pendiente',
-                    'Mixto'      => 'Parcial',
-                    default      => 'Pendiente',
-                };
+                $orderStatus = $this->orderStatus();
                 $invoiceStatus = $pendingBalance > 0 ? 'Credito' : 'Pagada';
 
-                $order = Order::create([
-                    'client_id'               => $finalClientId,
-                    'user_id'                 => auth()->id() ?? 1,
-                    'order_date'              => now(),
-                    'estimated_delivery_date' => in_array($this->order_type, ['Produccion', 'Mixto']) ? $this->delivery_date : now(),
-                    'type'                    => $this->order_type,
-                    'status'                  => $orderStatus,
-                    'estimated_price'         => $this->total,
-                    'advance_payment'         => $actualPayment,
-                ]);
+                $order = Order::create($this->orderData($finalClientId, $orderStatus, $actualPayment));
 
-                $invoice = Invoice::create([
-                    'invoice_number' => 'FAC-' . strtoupper(substr(uniqid(), 7)),
-                    'client_id'      => $finalClientId,
-                    'order_id'       => $order->id,
-                    'user_id'        => auth()->id() ?? 1,
-                    'invoice_date'   => now(),
-                    'subtotal'       => $this->subtotal,
-                    'tax'            => $this->tax,
-                    'total'          => $this->total,
-                    'status'         => $invoiceStatus,
-                ]);
+                $invoice = Invoice::create($this->invoiceData($finalClientId, $order->id, $invoiceStatus));
 
                 foreach ($this->cart as $item) {
-                    $itemData = [
-                        'product_id'   => $item['id'],
-                        'description'  => $item['name'],
-                        'quantity'     => $item['quantity'],
-                        'unit_price'   => $item['price'],
-                        'subtotal'     => $item['price'] * $item['quantity'],
-                        'measurements' => $item['measurements'] ?? '',
-                        'material'     => $item['material'] ?? '',
-                    ];
+                    $itemData = $this->itemData($item);
 
-                    OrderItem::create(array_merge(['order_id' => $order->id], $itemData));
-                    InvoiceItem::create(array_merge(['invoice_id' => $invoice->id], $itemData));
+                    $orderItem = OrderItem::create(array_merge(['order_id' => $order->id], $itemData));
+                    $invoiceItem = InvoiceItem::create(array_merge(['invoice_id' => $invoice->id], $itemData));
 
-                    if ($item['type'] === 'Producto' && !$item['requires_production']) {
-                        Product::where('id', $item['id'])->decrement('stock', $item['quantity']);
-                    }
+                    $this->consumeDirectProduct($item);
+
+                    $this->consumeServiceMaterial($item, $orderItem->id, $invoiceItem->id);
                 }
 
                 if ($this->hasProductionItems) {
@@ -279,11 +253,7 @@ new class extends Component {
                 }
             });
 
-            session()->flash('success', match ($this->order_type) {
-                'Mixto'      => '✨ ¡Venta mixta procesada! La parte del taller quedó en producción.',
-                'Produccion' => '✨ ¡Pedido de taller registrado!',
-                default      => '✨ ¡Venta procesada!',
-            });
+            $this->success($this->successMessage(), position: 'toast-top toast-center');
 
             $this->reset([
                 'cart', 'client_id', 'selectedClient',
@@ -296,8 +266,264 @@ new class extends Component {
             $this->calculateTotals();
 
         } catch (\Exception $e) {
-            session()->flash('error', '❌ Error: ' . $e->getMessage());
+            $this->error('Error: ' . $e->getMessage(), position: 'toast-top toast-center');
         }
+    }
+
+    private function cartItemFromProduct(Product $product): array {
+        $product->loadMissing(['materiales.unidad', 'unidad']);
+        $materialOptions = $this->materialOptionsFor($product);
+        $selectedMaterial = $materialOptions[0] ?? null;
+
+        return [
+            'id'                  => $product->id,
+            'name'                => $product->name,
+            'price'               => $product->sale_price,
+            'quantity'            => 1,
+            'type'                => $product->type,
+            'stock'               => (float) $product->stock,
+            'unit'                => $product->unidad->name ?? 'Und',
+            'requires_production' => (bool) $product->requires_production,
+            'measurements'        => '',
+            'material'            => $selectedMaterial['name'] ?? '',
+            'material_lost'       => 0,
+            'material_options'    => $materialOptions,
+            'selected_material_id'=> $selectedMaterial['id'] ?? '',
+            'material_stock'      => $selectedMaterial['stock'] ?? 0,
+            'material_unit'       => $selectedMaterial['unit'] ?? '',
+            'material_per_unit'   => $selectedMaterial['quantity'] ?? 1,
+        ];
+    }
+
+    public function updateCartMaterial($index, $materialId = null): void {
+        if (!isset($this->cart[$index])) {
+            return;
+        }
+
+        if ($materialId !== null) {
+            $this->cart[$index]['selected_material_id'] = $materialId;
+        }
+
+        $selected = collect($this->cart[$index]['material_options'] ?? [])
+            ->firstWhere('id', (int) $this->cart[$index]['selected_material_id']);
+
+        if (!$selected) {
+            $this->cart[$index]['material'] = '';
+            $this->cart[$index]['material_stock'] = 0;
+            $this->cart[$index]['material_unit'] = '';
+            $this->cart[$index]['material_per_unit'] = 1;
+            return;
+        }
+
+        $this->cart[$index]['material'] = $selected['name'];
+        $this->cart[$index]['material_stock'] = $selected['stock'];
+        $this->cart[$index]['material_unit'] = $selected['unit'];
+        $this->cart[$index]['material_per_unit'] = $selected['quantity'];
+    }
+
+    private function refreshCartState(): void {
+        $this->checkProductionRequirements();
+        $this->calculateTotals();
+    }
+
+    private function orderStatus(): string {
+        return match ($this->order_type) {
+            'Rapido'     => 'Entregado',
+            'Produccion' => 'Pendiente',
+            'Mixto'      => 'Parcial',
+            default      => 'Pendiente',
+        };
+    }
+
+    private function orderData(int $clientId, string $status, float $payment): array {
+        return [
+            'client_id'               => $clientId,
+            'user_id'                 => auth()->id() ?? 1,
+            'order_date'              => now(),
+            'estimated_delivery_date' => in_array($this->order_type, ['Produccion', 'Mixto']) ? $this->delivery_date : now(),
+            'type'                    => $this->order_type,
+            'status'                  => $status,
+            'estimated_price'         => $this->total,
+            'advance_payment'         => $payment,
+        ];
+    }
+
+    private function invoiceData(int $clientId, int $orderId, string $status): array {
+        return [
+            'invoice_number' => 'FAC-' . strtoupper(substr(uniqid(), 7)),
+            'client_id'      => $clientId,
+            'order_id'       => $orderId,
+            'user_id'        => auth()->id() ?? 1,
+            'invoice_date'   => now(),
+            'subtotal'       => $this->subtotal,
+            'tax'            => $this->tax,
+            'total'          => $this->total,
+            'status'         => $status,
+        ];
+    }
+
+    private function itemData(array $item): array {
+        return [
+            'product_id'     => $item['id'],
+            'description'    => $item['name'],
+            'quantity'       => $item['quantity'],
+            'unit_price'     => $item['price'],
+            'subtotal'       => $item['price'] * $item['quantity'],
+            'measurements'   => $item['measurements'] ?? '',
+            'material'       => $item['material'] ?? '',
+            'material_lost'  => $item['type'] === 'Servicio' ? (float) ($item['material_lost'] ?? 0) : 0,
+        ];
+    }
+
+    private function materialOptionsFor(Product $product): array {
+        if ($product->type !== 'Servicio') {
+            return [];
+        }
+
+        return $product->materiales
+            ->map(fn($material) => [
+                'id'       => $material->id,
+                'name'     => $material->name,
+                'stock'    => (float) $material->stock,
+                'unit'     => $material->unidad->name ?? 'Und',
+                'quantity' => (float) $material->pivot->quantity,
+            ])
+            ->values()
+            ->all();
+    }
+
+    private function materialConsumption(array $item): array {
+        $quantity = max(0, (float) ($item['quantity'] ?? 0));
+        $lost = $item['type'] === 'Servicio' ? max(0, (float) ($item['material_lost'] ?? 0)) : 0;
+        $perUnit = max(0, (float) ($item['material_per_unit'] ?? 1));
+        $used = $quantity * $perUnit;
+
+        return [
+            'used' => $used,
+            'lost' => $lost,
+            'total' => $used + $lost,
+        ];
+    }
+
+    private function validateMaterialStock(): bool {
+        foreach ($this->cart as $item) {
+            if ($item['type'] !== 'Servicio' || empty($item['material_options'])) {
+                continue;
+            }
+
+            if (empty($item['selected_material_id'])) {
+                $this->error("Seleccione el material para {$item['name']}.", position: 'toast-top toast-center');
+                return false;
+            }
+
+            if (!$this->selectedMaterialOption($item)) {
+                $this->error("El material seleccionado no pertenece a la receta de {$item['name']}.", position: 'toast-top toast-center');
+                return false;
+            }
+
+            $material = Product::with('unidad')->find($item['selected_material_id']);
+            $consumption = $this->materialConsumption($item);
+
+            if (!$material || $consumption['total'] > (float) $material->stock) {
+                $available = $material ? number_format((float) $material->stock, 2) . ' ' . ($material->unidad->name ?? 'Und') : '0';
+                $this->error("Material insuficiente para {$item['name']}. Disponible: {$available}.", position: 'toast-top toast-center');
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function selectedMaterialOption(array $item): ?array {
+        return collect($item['material_options'] ?? [])
+            ->firstWhere('id', (int) ($item['selected_material_id'] ?? 0));
+    }
+
+    private function validateProductStock(): bool {
+        foreach ($this->cart as $item) {
+            if ($item['type'] !== 'Producto' || $item['requires_production']) {
+                continue;
+            }
+
+            $product = Product::find($item['id']);
+
+            if (!$product || (float) $item['quantity'] > (float) $product->stock) {
+                $available = $product ? number_format((float) $product->stock, 2) . ' ' . ($product->unidad->name ?? 'Und') : '0';
+                $this->error("Stock insuficiente para {$item['name']}. Disponible: {$available}.", position: 'toast-top toast-center');
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function consumeServiceMaterial(array $item, int $orderItemId, int $invoiceItemId): void {
+        if ($item['type'] !== 'Servicio' || empty($item['selected_material_id'])) {
+            return;
+        }
+
+        if (!$this->selectedMaterialOption($item)) {
+            throw new \Exception("El material seleccionado no pertenece a la receta de {$item['name']}.");
+        }
+
+        $material = Product::with('unidad')->lockForUpdate()->find($item['selected_material_id']);
+
+        if (!$material) {
+            return;
+        }
+
+        $consumption = $this->materialConsumption($item);
+
+        if ($consumption['total'] <= 0) {
+            return;
+        }
+
+        if ($consumption['total'] > (float) $material->stock) {
+            throw new \Exception("Material insuficiente para {$item['name']}. Disponible: {$material->stock}.");
+        }
+
+        OrderItemMaterial::create([
+            'order_item_id'             => $orderItemId,
+            'invoice_item_id'           => $invoiceItemId,
+            'material_id'               => $material->id,
+            'material_name'             => $material->name,
+            'unit_name'                 => $material->unidad->name ?? 'Und',
+            'available_stock_snapshot'  => $material->stock,
+            'quantity_per_service'      => $item['material_per_unit'] ?? 1,
+            'quantity_used'             => $consumption['used'],
+            'material_lost'             => $consumption['lost'],
+            'total_consumed'            => $consumption['total'],
+        ]);
+
+        $material->decrement('stock', $consumption['total']);
+    }
+
+    private function consumeDirectProduct(array $item): void {
+        if ($item['type'] !== 'Producto' || $item['requires_production']) {
+            return;
+        }
+
+        $product = Product::lockForUpdate()->find($item['id']);
+
+        if (!$product) {
+            throw new \Exception("Producto no encontrado: {$item['name']}.");
+        }
+
+        if ((float) $item['quantity'] > (float) $product->stock) {
+            throw new \Exception("Stock insuficiente para {$item['name']}. Disponible: {$product->stock}.");
+        }
+
+        $product->decrement('stock', $item['quantity']);
+    }
+
+    private function successMessage(): string {
+        return match ($this->order_type) {
+            'Mixto'      => $this->pay_full
+                ? 'Venta mixta registrada exitosamente. La parte del taller quedó en producción.'
+                : 'Venta mixta registrada exitosamente. Pedido en proceso para taller.',
+            'Produccion' => 'Pedido en proceso. Orden de taller registrada exitosamente.',
+            default      => 'Venta registrada exitosamente.',
+        };
     }
 }; ?>
 
@@ -359,16 +585,54 @@ new class extends Component {
                                             @endif
                                         @endif
                                     </div>
-                                    @if($item['requires_production'])
-                                        <div class="flex gap-2 mt-2">
+                                    @if($item['type'] === 'Servicio')
+                                        @php
+                                            $materialUsed = (float) $item['quantity'] * (float) ($item['material_per_unit'] ?? 1);
+                                            $materialLost = (float) ($item['material_lost'] ?? 0);
+                                            $materialTotal = $materialUsed + $materialLost;
+                                            $materialStock = (float) ($item['material_stock'] ?? 0);
+                                            $materialOver = !empty($item['material_options']) && $materialTotal > $materialStock;
+                                        @endphp
+                                        <div class="flex flex-wrap gap-2 mt-2">
                                             <div class="flex items-center gap-1 bg-gray-50 px-2 py-1 rounded border border-gray-200">
                                                 <span class="text-[9px] text-gray-400 uppercase">Medidas:</span>
                                                 <input type="text" wire:model="cart.{{$index}}.measurements" class="text-[10px] border-none bg-transparent p-0 w-20 focus:ring-0">
                                             </div>
-                                            <div class="flex items-center gap-1 bg-gray-50 px-2 py-1 rounded border border-gray-200">
-                                                <span class="text-[9px] text-gray-400 uppercase">Mat:</span>
-                                                <input type="text" wire:model="cart.{{$index}}.material" class="text-[10px] border-none bg-transparent p-0 w-20 focus:ring-0">
+                                            @if(!empty($item['material_options']))
+                                                <div class="flex items-center gap-1 bg-gray-50 px-2 py-1 rounded border border-gray-200">
+                                                    <span class="text-[9px] text-gray-400 uppercase">Mat:</span>
+                                                    <select wire:model="cart.{{$index}}.selected_material_id" wire:change="updateCartMaterial('{{ $index }}', $event.target.value)" class="text-[10px] border-none bg-transparent p-0 w-28 focus:ring-0">
+                                                        @foreach($item['material_options'] as $materialOption)
+                                                            <option value="{{ $materialOption['id'] }}">{{ $materialOption['name'] }}</option>
+                                                        @endforeach
+                                                    </select>
+                                                </div>
+                                            @else
+                                                <div class="flex items-center gap-1 bg-yellow-50 px-2 py-1 rounded border border-yellow-100">
+                                                    <span class="text-[9px] text-yellow-600 uppercase font-bold">Sin receta</span>
+                                                </div>
+                                            @endif
+                                            <div class="flex items-center gap-1 bg-red-50 px-2 py-1 rounded border border-red-100">
+                                                <span class="text-[9px] text-red-400 uppercase">Perdido:</span>
+                                                <input type="number" min="0" step="1" wire:model.live="cart.{{$index}}.material_lost" class="text-[10px] border-none bg-transparent p-0 w-14 focus:ring-0 text-red-600 font-bold">
                                             </div>
+                                        </div>
+                                        @if(!empty($item['material_options']))
+                                            <div class="flex flex-wrap gap-2 mt-2 text-[10px]">
+                                                <span class="px-2 py-1 rounded bg-slate-50 text-slate-500 border border-slate-100">
+                                                    Disponible: <b class="{{ $materialOver ? 'text-red-600' : 'text-slate-700' }}">{{ number_format($materialStock, 2) }}</b> {{ $item['material_unit'] ?? 'Und' }}
+                                                </span>
+                                                <span class="px-2 py-1 rounded {{ $materialOver ? 'bg-red-50 text-red-600 border-red-100' : 'bg-green-50 text-green-700 border-green-100' }} border">
+                                                    Consume: <b>{{ number_format($materialTotal, 2) }}</b> {{ $item['material_unit'] ?? 'Und' }}
+                                                </span>
+                                            </div>
+                                        @endif
+                                    @elseif($item['type'] === 'Producto')
+                                        @php $productOver = (float) $item['quantity'] > (float) ($item['stock'] ?? 0); @endphp
+                                        <div class="mt-2 text-[10px]">
+                                            <span class="px-2 py-1 rounded {{ $productOver ? 'bg-red-50 text-red-600 border-red-100' : 'bg-green-50 text-green-700 border-green-100' }} border">
+                                                Disponible: <b>{{ number_format((float) ($item['stock'] ?? 0), 2) }}</b> {{ $item['unit'] ?? 'Und' }}
+                                            </span>
                                         </div>
                                     @endif
                                 </td>
@@ -534,7 +798,18 @@ new class extends Component {
 
                 @php
                     $recv       = (float) $received_amount;
+                    $hasStockIssues = collect($cart)->contains(function ($item) {
+                        if ($item['type'] === 'Servicio' && !empty($item['material_options'])) {
+                            $required = ((float) $item['quantity'] * (float) ($item['material_per_unit'] ?? 1)) + (float) ($item['material_lost'] ?? 0);
+                            return empty($item['selected_material_id']) || $required > (float) ($item['material_stock'] ?? 0);
+                        }
+
+                        return $item['type'] === 'Producto'
+                            && !$item['requires_production']
+                            && (float) $item['quantity'] > (float) ($item['stock'] ?? PHP_FLOAT_MAX);
+                    });
                     $isDisabled = match(true) {
+                        $hasStockIssues       => true,
                         $is_mixed            => $recv < (float) $minimum_payment,
                         $order_type === 'Rapido' => $recv < (float) $total,
                         default              => false,
