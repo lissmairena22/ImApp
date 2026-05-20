@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover">
     <meta name="csrf-token" content="{{ csrf_token() }}">
-    <title>{{ isset($title) ? $title.' - '.config('app.name') : 'Imprenta América' }}</title>
+    <title>{{ isset($title) ? $title.' - '.config('app.name') : 'Imprenta Minerva' }}</title>
 
     @vite(['resources/css/app.css', 'resources/js/app.js'])
 </head>
@@ -14,7 +14,7 @@
         <x-slot:brand>
             <div class="flex items-center gap-2 italic font-black text-primary">
                 <x-icon name="o-printer" class="w-6 h-6" />
-                <span>Imprenta <span class="text-base-content">América</span></span>
+                <span>Imprenta <span class="text-base-content">Minerva</span></span>
             </div>
         </x-slot:brand>
         <x-slot:actions>
@@ -30,7 +30,7 @@
             <div class="px-6 pt-6 pb-4">
                 <div class="flex items-center gap-3 italic font-black text-2xl text-primary">
                     <x-icon name="o-printer" class="w-10 h-10" />
-                    <span class="hidden-when-collapsed">América</span>
+                    <span class="hidden-when-collapsed">Minerva</span>
                 </div>
                 <p class="text-[10px] uppercase tracking-widest font-bold text-gray-400 mt-1 hidden-when-collapsed">Sistema de Gestión</p>
             </div>
@@ -54,8 +54,7 @@
                 <x-menu-item title="Dashboard" icon="o-home" link="/" />
 
                 <x-menu-sub title="Producción" icon="o-briefcase">
-                    <x-menu-item title="Órdenes de Trabajo" icon="o-clipboard-document-list" link="/ordenes" />
-                    <x-menu-item title="Seguimiento" icon="o-arrow-path" link="/produccion" />
+                    <x-menu-item title="Órdenes de Trabajo" icon="o-clipboard-document-list" link="/pedidos" />
                 </x-menu-sub>
 
                 <x-menu-sub title="Comercial" icon="o-banknotes">
@@ -68,7 +67,6 @@
                 <x-menu-sub title="Inventario" icon="o-archive-box">
                     <x-menu-item title="Productos/Materiales" icon="o-square-3-stack-3d" link="/productos" />
                     <x-menu-item title="Compras/Insumos" icon="o-truck" link="/compras" />
-                    {{-- Nuevo ítem de Proveedores --}}
                     <x-menu-item title="Proveedores" icon="o-building-office-2" link="/proveedores" />
                 </x-menu-sub>
 
@@ -89,7 +87,6 @@
         </x-slot:content>
     </x-main>
 
-    {{-- Notificaciones --}}
     <x-toast />
 </body>
 </html>
