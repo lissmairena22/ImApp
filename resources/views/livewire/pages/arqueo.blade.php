@@ -7,7 +7,6 @@ use Illuminate\Support\Facades\DB;
 new class extends Component {
     use Toast;
 
-    // Variables dinámicas del sistema (se calculan en vivo en el método with)
     public float $initial_balance = 0.00;
     public float $total_incomes = 0.00;
     public float $total_expenses = 0.00;
@@ -15,24 +14,20 @@ new class extends Component {
     public $exchange_rate = 36.5;
     public string $notes = '';
 
-    // Arreglo para Billetes y Monedas Locales (Córdobas/Pesos)
     public array $nio = [
         '1000' => '', '500' => '', '200' => '', '100' => '',
         '50' => '', '20' => '', '10' => '', '5' => '', '1' => ''
     ];
 
-    // Arreglo para Dólares (USD)
     public array $usd = [
         '100' => '', '50' => '', '20' => '', '10' => '', '5' => '', '1' => ''
     ];
 
-    // Propiedad Computada: Calcula el balance esperado según el sistema
     public function getSystemBalanceProperty(): float
     {
         return $this->initial_balance + $this->total_incomes - $this->total_expenses;
     }
 
-    // Procesa el cierre definitivo guardando los datos en la base de datos
     public function closeRegister()
     {
         $this->validate([
@@ -45,18 +40,18 @@ new class extends Component {
         $physical_balance = $this->getPhysicalBalanceProperty();
         $difference = $physical_balance - $this->system_balance;
 
-        // Validación de descuadres obligatorios
         if (round($difference, 2) !== 0.00 && empty(trim($this->notes))) {
             $this->addError('notes', 'Es obligatorio justificar el motivo del sobrante o faltante en caja.');
             $this->error('Falta justificación del descuadre.');
             return;
         }
 
-        // 1. Buscamos la sesión de caja que esté abierta actualmente
-        $activeRegister = DB::table('cash_registers')->where('status', 'abierta')->first();
+        $activeRegister = DB::table('cash_registers')
+            ->where('user_id', auth()->id())
+            ->where('status', 'Abierta')
+            ->first();
 
         if ($activeRegister) {
-            // 2. Actualizamos la fila con los totales reales calculados
             DB::table('cash_registers')->where('id', $activeRegister->id)->update([
                 'closed_at' => now(),
                 'cash_sales' => $this->total_incomes,
@@ -64,7 +59,7 @@ new class extends Component {
                 'system_balance' => $this->system_balance,
                 'physical_balance' => $physical_balance,
                 'difference' => $difference,
-                'status' => 'cerrada',
+                'status' => 'Cerrada',
                 'notes' => $this->notes,
                 'updated_at' => now()
             ]);
@@ -74,7 +69,6 @@ new class extends Component {
             $this->error('No se encontró ninguna caja abierta para cerrar.');
         }
 
-        // Limpieza de todos los campos para el siguiente turno
         $this->nio = [
             '1000' => '', '500' => '', '200' => '', '100' => '',
             '50' => '', '20' => '', '10' => '', '5' => '', '1' => ''
@@ -113,26 +107,21 @@ new class extends Component {
 
     public function with(): array
     {
-        // --- CONEXIÓN COMPLETA A LA BASE DE DATOS EN VIVO ---
 
-        // 1. Buscamos la caja activa del turno actual
-        $activeRegister = DB::table('cash_registers')->where('status', 'abierta')->first();
+        $activeRegister = DB::table('cash_registers')
+            ->where('user_id', auth()->id())
+            ->where('status', 'Abierta')
+            ->first();
 
         if ($activeRegister) {
             // 2. Cargamos dinámicamente el monto con el que abrieron la caja (Apertura)
             $this->initial_balance = (float)$activeRegister->initial_balance;
 
             // 3. Sumamos los ingresos (ventas, anticipos, cancelaciones) vinculados a esta caja
-            $this->total_incomes = DB::table('cash_movements')
-                ->where('cash_register_id', $activeRegister->id)
-                ->whereIn('type', ['Ingreso', 'Abono'])
-                ->sum('amount');
+            $this->total_incomes = (float) $activeRegister->cash_sales;
 
             // 4. Sumamos los egresos (gastos rápidos de caja) vinculados a esta caja
-            $this->total_expenses = DB::table('cash_movements')
-                ->where('cash_register_id', $activeRegister->id)
-                ->where('type', 'Egreso')
-                ->sum('amount');
+            $this->total_expenses = (float) $activeRegister->cash_out;
         } else {
             // Si no hay ninguna caja abierta en el sistema, todo se mantiene en cero
             $this->initial_balance = 0.00;

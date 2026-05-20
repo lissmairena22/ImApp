@@ -16,4 +16,5 @@ public function usuario() { return $this->belongsTo(User::class, 'user_id'); }
 public function items() { return $this->hasMany(OrderItem::class); }
 public function produccion() { return $this->hasOne(Production::class); }
 public function factura() { return $this->hasOne(Invoice::class); }
+public function inventoryOutput() { return $this->hasOne(InventoryOutput::class); }
 }

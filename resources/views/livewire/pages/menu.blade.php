@@ -28,7 +28,14 @@ new class extends Component
     {
         $this->validate([
             'monto_inicial' => 'required|numeric|min:0',
+            'tasa_cambio' => 'required|numeric|min:1',
         ]);
+
+        if (CashRegister::where('user_id', auth()->id())->where('status', 'Abierta')->exists()) {
+            $this->cajaAbierta = true;
+            $this->error('Ya existe una caja abierta para este usuario.', position: 'toast-top toast-center');
+            return;
+        }
 
         // PERSISTENCIA REAL EN TU BD
         CashRegister::create([
@@ -41,12 +48,19 @@ new class extends Component
         ]);
 
         $this->cajaAbierta = true;
-        $this->success("Caja abierta con C$ {$this->monto_inicial}", position: 'toast-bottom toast-end');
+        $this->success("Caja abierta con C$ {$this->monto_inicial}", position: 'toast-top toast-center');
     }
 };
 ?>
 
 <div class="p-6">
+    @if(session('cash_required'))
+        <x-alert title="Caja requerida"
+                 description="{{ session('cash_required') }}"
+                 icon="o-exclamation-triangle"
+                 class="alert-warning mb-6" />
+    @endif
+
     {{-- Encabezado de Bienvenida --}}
     <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
         <div>

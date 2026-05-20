@@ -4,6 +4,7 @@ use Livewire\Volt\Component;
 use Livewire\WithPagination;
 use App\Models\Client;
 use Mary\Traits\Toast;
+use Illuminate\Validation\Rule;
 
 new class extends Component {
     use WithPagination;
@@ -13,7 +14,6 @@ new class extends Component {
     public bool $drawerModal = false;
     public bool $isEditMode = false;
 
-    // Propiedades del Formulario
     public $client_id, $name, $dni, $phone, $email, $address;
     public bool $is_active = true;
 
@@ -46,11 +46,19 @@ new class extends Component {
     public function save()
     {
         $this->validate([
-            'name' => 'required|string|max:255',
-            'dni' => 'nullable|string|max:20',
-            'phone' => 'nullable|string|max:20',
-            'email' => 'nullable|email|max:255',
-            'address' => 'nullable|string',
+            'name' => ['required', 'string', 'min:3', 'max:255'],
+            'dni' => ['required', 'string', 'max:20', Rule::unique('clients', 'dni')->ignore($this->client_id)],
+            'phone' => ['required', 'string', 'max:20'],
+            'email' => ['nullable', 'email', 'max:255', Rule::unique('clients', 'email')->ignore($this->client_id)],
+            'address' => ['nullable', 'string', 'max:500'],
+        ], [
+            'name.required' => 'El nombre del cliente o empresa es obligatorio.',
+            'name.min' => 'El nombre debe tener al menos 3 caracteres.',
+            'dni.required' => 'El DNI o Cédula/RUC es obligatorio.',
+            'dni.unique' => 'Este número de identificación ya está registrado en otro cliente.',
+            'phone.required' => 'El número de teléfono es obligatorio para contacto.',
+            'email.email' => 'Por favor ingrese un formato de correo electrónico válido.',
+            'email.unique' => 'Este correo electrónico ya está en uso por otro cliente.',
         ]);
 
         Client::updateOrCreate(
@@ -66,7 +74,7 @@ new class extends Component {
         );
 
         $this->drawerModal = false;
-        $this->success($this->isEditMode ? 'Cliente actualizado' : 'Cliente registrado');
+        $this->success($this->isEditMode ? 'Cliente actualizado exitosamente' : 'Cliente registrado exitosamente');
     }
 
     public function toggleActive(Client $client)
@@ -85,12 +93,12 @@ new class extends Component {
     {
         return [
             'clients' => Client::query()
-                ->when($this->search, function($q) {
-                    $q->where('name', 'like', "%{$this->search}%")
-                      ->orWhere('dni', 'like', "%{$this->search}%");
-                })
-                ->orderBy('id', 'desc')
-                ->paginate(10),
+            ->when($this->search, function($q) {
+                $q->where('name', 'like', "%{$this->search}%")
+                  ->orWhere('dni', 'like', "%{$this->search}%");
+            })
+            ->orderBy('id', 'desc')
+            ->paginate(10),
             'totalClients' => Client::count(),
             'activeClients' => Client::where('is_active', true)->count(),
             'headers' => [
@@ -155,11 +163,11 @@ new class extends Component {
 
     <x-drawer wire:model="drawerModal" title="{{ $isEditMode ? 'Editar Cliente' : 'Nuevo Cliente' }}" right separator with-close-button class="lg:w-1/3">
         <x-form wire:submit="save">
-            <x-input label="Nombre Completo / Razón Social" wire:model="name" icon="o-user" />
-            <x-input label="DNI o Cédula RUC" wire:model="dni" icon="o-identification" />
+            <x-input label="Nombre Completo / Razón Social *" wire:model="name" icon="o-user" required />
+            <x-input label="DNI o Cédula/RUC *" wire:model="dni" icon="o-identification" required />
 
             <div class="grid grid-cols-2 gap-4">
-                <x-input label="Teléfono" wire:model="phone" icon="o-phone" />
+                <x-input label="Teléfono *" wire:model="phone" icon="o-phone" required />
                 <x-input label="Email" wire:model="email" icon="o-envelope" />
             </div>
 

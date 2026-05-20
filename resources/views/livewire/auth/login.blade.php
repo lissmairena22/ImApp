@@ -30,7 +30,7 @@ class extends Component {
     <x-card class="shadow-2xl border-t-4 border-primary bg-base-100">
         <div class="mb-8 text-center">
             <x-icon name="o-printer" class="w-12 h-12 text-primary mb-2" />
-            <h1 class="text-2xl font-bold italic">Imprenta América</h1>
+            <h1 class="text-2xl font-bold italic">Imprenta Minnerva</h1>
             <p class="text-sm text-gray-500">Gestión de Producción y Ventas</p>
         </div>
 

@@ -7,9 +7,10 @@ class OrderItem extends Model {
     protected $fillable = [
         'order_id', 'product_id', 'description', 'quantity',
         'unit_price', 'subtotal', 'measurements', 'material',
-        'print_type', 'finish'
+        'material_lost', 'print_type', 'finish'
     ];
 
-    public function pedido() { return $this->belongsTo(Order::class, 'order_id'); }
-public function producto() { return $this->belongsTo(Product::class); }
+public function pedido() { return $this->belongsTo(Order::class, 'order_id'); }
+public function producto() { return $this->belongsTo(Product::class, 'product_id'); }
+public function materialConsumptions() { return $this->hasMany(OrderItemMaterial::class); }
 }
