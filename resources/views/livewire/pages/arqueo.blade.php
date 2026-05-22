@@ -114,21 +114,15 @@ new class extends Component {
             ->first();
 
         if ($activeRegister) {
-            // 2. Cargamos dinámicamente el monto con el que abrieron la caja (Apertura)
             $this->initial_balance = (float)$activeRegister->initial_balance;
-
-            // 3. Sumamos los ingresos (ventas, anticipos, cancelaciones) vinculados a esta caja
             $this->total_incomes = (float) $activeRegister->cash_sales;
-
-            // 4. Sumamos los egresos (gastos rápidos de caja) vinculados a esta caja
             $this->total_expenses = (float) $activeRegister->cash_out;
+
         } else {
-            // Si no hay ninguna caja abierta en el sistema, todo se mantiene en cero
             $this->initial_balance = 0.00;
             $this->total_incomes = 0.00;
             $this->total_expenses = 0.00;
         }
-        // --- FIN CONEXIÓN ---
 
         $system = $this->getSystemBalanceProperty();
         $physical = $this->getPhysicalBalanceProperty();

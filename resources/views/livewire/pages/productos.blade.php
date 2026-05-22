@@ -28,7 +28,7 @@ new class extends Component {
     public $product_id, $name, $category_id, $unit_id, $type;
     public $sale_price, $cost_price, $stock, $min_stock;
     public bool $is_active = true;
-    public bool $is_sellable = true; // <-- NUEVO CAMPO
+    public bool $is_sellable = true; 
 
     public function updatedSearch()
     {
