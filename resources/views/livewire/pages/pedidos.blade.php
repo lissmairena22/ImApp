@@ -16,6 +16,29 @@ new class extends Component {
         $this->resetPage();
     }
 
+    // Nueva función para marcar como Entregada
+    public function deliverOrder($orderId)
+    {
+        $order = Order::findOrFail($orderId);
+
+        if (in_array($order->status, ['Entregado', 'Cancelado'])) {
+            $this->error('Esta orden ya no se puede modificar');
+            return;
+        }
+
+        $order->update([
+            'status' => 'Entregado'
+        ]);
+
+        if ($order->factura) {
+            $order->factura->update([
+                'status' => 'Entregada' // Cambia el estado de la factura a Entregada
+            ]);
+        }
+
+        $this->success('Orden marcada como entregada con éxito');
+    }
+
     public function cancelOrder($orderId)
     {
         $order = Order::findOrFail($orderId);
@@ -40,9 +63,10 @@ new class extends Component {
 
     public function with(): array
     {
+        // Modificamos el whereIn para incluir 'Entregado' y 'Cancelado' y que no desaparezcan
         $orders = Order::query()
             ->with(['cliente', 'usuario', 'factura'])
-            ->whereIn('status', ['Pendiente', 'EnProceso'])
+            ->whereIn('status', ['Pendiente', 'EnProceso', 'Entregado', 'Cancelado'])
             ->when($this->search, function($q) {
                 $q->whereHas('cliente', function($query) {
                     $query->where('name', 'like', "%{$this->search}%");
@@ -54,6 +78,7 @@ new class extends Component {
 
         return [
             'orders' => $orders,
+            // El contador sigue midiendo solo las activas (producción/espera)
             'totalOrders' => Order::whereIn('status', ['Pendiente', 'EnProceso'])->count(),
             'headers' => [
                 ['key' => 'id', 'label' => 'ORDEN'],
@@ -121,18 +146,35 @@ new class extends Component {
                 </span>
             @endscope
 
+            {{-- Modificado: Badges dinámicos de color según el estado --}}
             @scope('cell_status', $order)
-                <x-badge value="{{ $order->status }}"
-                         class="badge-warning"
-                         icon="o-clock" />
+                @if($order->status === 'Entregado')
+                    <x-badge value="Entregado" class="badge-success text-white" icon="o-check-circle" />
+                @elseif($order->status === 'Cancelado')
+                    <x-badge value="Cancelado" class="badge-error text-white" icon="o-x-circle" />
+                @else
+                    <x-badge value="{{ $order->status }}" class="badge-warning" icon="o-clock" />
+                @endif
             @endscope
 
+            {{-- Modificado: Acciones condicionales --}}
             @scope('cell_actions', $order)
                 <div class="flex gap-2">
-                    <x-button icon="o-x-circle"
-                              wire:click="cancelOrder({{ $order->id }})"
-                              wire:confirm="¿Cancelar esta orden?"
-                              class="btn-sm btn-circle btn-ghost text-error" />
+                    @if(!in_array($order->status, ['Entregado', 'Cancelado']))
+                        {{-- Botón para Entregar --}}
+                        <x-button icon="o-check"
+                                  wire:click="deliverOrder({{ $order->id }})"
+                                  wire:confirm="¿Marcar esta orden y factura como ENTREGADA?"
+                                  class="btn-sm btn-circle btn-ghost text-success" />
+
+                        {{-- Botón para Cancelar --}}
+                        <x-button icon="o-x-circle"
+                                  wire:click="cancelOrder({{ $order->id }})"
+                                  wire:confirm="¿Cancelar esta orden?"
+                                  class="btn-sm btn-circle btn-ghost text-error" />
+                    @else
+                        <span class="text-xs text-gray-400 italic p-1">Finalizada</span>
+                    @endif
                 </div>
             @endscope
 
