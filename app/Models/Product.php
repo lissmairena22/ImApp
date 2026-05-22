@@ -13,7 +13,8 @@ class Product extends Model
         'category_id', 'unit_id', 'name', 'type',
         'sale_price', 'cost_price', 'stock', 'min_stock',
         'manage_stock', 'estimated_production_time', 'is_active',
-        'is_sellable'
+        'is_sellable', 'items_per_unit', 'parent_id',
+
     ];
 
 
