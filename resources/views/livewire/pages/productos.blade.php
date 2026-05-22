@@ -18,17 +18,18 @@ new class extends Component {
     public bool $drawerModal = false;
     public bool $isEditMode = false;
 
-    // Control de la UI de Recetas
-    public bool $recipeDrawer = false;
-    public ?Product $currentService = null;
-    public $material_id_to_add;
-    public $material_quantity = 1;
+    // Control de Modales Secundarios (Categoría y Unidad)
+    public bool $categoryModal = false;
+    public bool $unitModal = false;
+    public string $newCategoryName = '';
+    public string $newUnitName = '';
 
     // Propiedades del Formulario Principal
     public $product_id, $name, $category_id, $unit_id, $type;
     public $sale_price, $cost_price, $stock, $min_stock;
+    public $items_per_unit = 1;
     public bool $is_active = true;
-    public bool $is_sellable = true; 
+    public bool $is_sellable = true;
 
     public function updatedSearch()
     {
@@ -39,6 +40,36 @@ new class extends Component {
     {
         $this->unit_id = null;
     }
+
+    // --- NUEVAS FUNCIONES PARA GUARDAR CATEGORÍA Y UNIDAD ---
+    public function saveCategory()
+    {
+        $this->validate([
+            'newCategoryName' => 'required|string|max:255|unique:categories,name'
+        ]);
+
+        $category = Category::create(['name' => $this->newCategoryName]);
+
+        $this->category_id = $category->id; // Seleccionar automáticamente
+        $this->categoryModal = false;
+        $this->newCategoryName = '';
+        $this->success('Categoría creada exitosamente');
+    }
+
+    public function saveUnit()
+    {
+        $this->validate([
+            'newUnitName' => 'required|string|max:255|unique:units,name'
+        ]);
+
+        $unit = Unit::create(['name' => $this->newUnitName]);
+
+        $this->unit_id = $unit->id; // Seleccionar automáticamente
+        $this->unitModal = false;
+        $this->newUnitName = '';
+        $this->success('Unidad de medida creada exitosamente');
+    }
+    // --------------------------------------------------------
 
     public function create()
     {
@@ -58,6 +89,7 @@ new class extends Component {
         $this->cost_price = $product->cost_price;
         $this->stock = $product->stock;
         $this->min_stock = $product->min_stock;
+        $this->items_per_unit = $product->items_per_unit ?? 1;
         $this->is_active = $product->is_active;
         $this->is_sellable = $product->is_sellable ?? true;
 
@@ -68,17 +100,19 @@ new class extends Component {
     public function save()
     {
         $this->validate([
-            'name' => ['required', 'string', 'max:255', 'regex:/^[a-zA-Z0-9\sáéíóúÁÉÍÓÚñÑ\-\/]+$/'], // Permitimos números y guiones para los materiales
+            'name' => ['required', 'string', 'max:255', 'regex:/^[a-zA-Z0-9\sáéíóúÁÉÍÓÚñÑ\-\/]+$/'],
             'category_id' => 'required|exists:categories,id',
             'unit_id' => 'required|exists:units,id',
             'sale_price' => 'required|numeric|min:0',
             'type' => 'required|in:Producto,Servicio',
-            'stock' => 'required|numeric|min:0',
-            'min_stock' => 'required|numeric|min:0',
+            'stock' => $this->type === 'Producto' ? 'required|numeric|min:0' : 'nullable',
+            'min_stock' => $this->type === 'Producto' ? 'required|numeric|min:0' : 'nullable',
+            'items_per_unit' => $this->type === 'Producto' ? 'required|numeric|min:0.01' : 'nullable',
             'is_sellable' => 'boolean',
         ]);
 
-        Product::updateOrCreate(
+        // 1. Guardar el producto principal (Padre)
+        $product = Product::updateOrCreate(
             ['id' => $this->product_id],
             [
                 'name' => $this->name,
@@ -87,72 +121,78 @@ new class extends Component {
                 'type' => $this->type,
                 'sale_price' => $this->sale_price ?: 0,
                 'cost_price' => $this->cost_price ?: 0,
-                'stock' => $this->stock,
-                'min_stock' => $this->min_stock,
+                'stock' => $this->type === 'Producto' ? ($this->stock ?: 0) : 0,
+                'min_stock' => $this->type === 'Producto' ? ($this->min_stock ?: 0) : 0,
+                'items_per_unit' => $this->type === 'Producto' ? ($this->items_per_unit ?: 1) : 1,
                 'is_active' => $this->is_active,
-                'is_sellable' => $this->is_sellable,
+                'is_sellable' => $this->type === 'Producto' ? $this->is_sellable : true,
             ]
         );
 
+        // 2. Automatización: Si es un registro NUEVO, es un Producto y contiene más de 1 unidad base
+        if (!$this->product_id && $this->type === 'Producto' && $this->items_per_unit > 1) {
+
+            // Busca la unidad "Unidad" o la crea si no existe para asignársela al hijo
+            $unidadSuela = Unit::firstOrCreate(['name' => 'Unidad']);
+
+            Product::create([
+                'name' => $this->name . ' (Suelto/Unidad)',
+                'category_id' => $this->category_id,
+                'unit_id' => $unidadSuela->id,
+                'type' => 'Producto',
+                // Calcula costos y precios proporcionales para el ítem desglosado
+                'sale_price' => $this->sale_price / $this->items_per_unit,
+                'cost_price' => ($this->cost_price ?: 0) / $this->items_per_unit,
+                'stock' => 0, // Inicia en cero hasta que se abra un paquete
+                'min_stock' => 0,
+                'items_per_unit' => 1,
+                'is_active' => true,
+                'is_sellable' => false, // Marcado como uso interno para los servicios/impresiones
+                'parent_id' => $product->id // Relación jerárquica
+            ]);
+        }
+
         $this->drawerModal = false;
-        $this->success($this->isEditMode ? 'Producto actualizado' : 'Producto registrado');
+        $this->success($this->isEditMode ? 'Registro actualizado' : 'Registro y unidades sueltas creados exitosamente');
+    }
+
+    // Proceso para desglosar un empaque/caja/resma en stock suelto
+    public function openPackage(Product $parentProduct)
+    {
+        if ($parentProduct->stock < 1) {
+            $this->error('No hay empaques cerrados en stock para abrir.');
+            return;
+        }
+
+        // Buscar si existe un producto hijo asociado a este padre
+        $childProduct = Product::where('parent_id', $parentProduct->id)->first();
+
+        if ($childProduct) {
+            // Restar 1 unidad al empaque principal
+            $parentProduct->decrement('stock', 1);
+
+            // Sumar la cantidad de unidades base contenidas al stock del hijo
+            $childProduct->increment('stock', $parentProduct->items_per_unit);
+
+            $this->success("Empaque abierto. Se agregaron {$parentProduct->items_per_unit} unidades sueltas al inventario.");
+        } else {
+            $this->error('Este producto no tiene configuradas unidades sueltas automáticamente.');
+        }
     }
 
     public function toggleActive(Product $product)
     {
         $product->update(['is_active' => !$product->is_active]);
-        $this->success($product->is_active ? 'Producto activado' : 'Producto desactivado');
+        $this->success($product->is_active ? 'Activado correctamente' : 'Desactivado correctamente');
     }
 
     public function resetForm()
     {
         $this->reset(['product_id', 'name', 'category_id', 'unit_id', 'type', 'sale_price', 'cost_price', 'stock', 'min_stock']);
+        $this->items_per_unit = 1;
         $this->is_active = true;
         $this->is_sellable = true;
     }
-
-    // --- NUEVAS FUNCIONES PARA LA RECETA (BOM) ---
-
-    // Abrir el panel de receta
-    public function openRecipe(Product $product)
-    {
-        $this->currentService = $product;
-        $this->reset(['material_id_to_add', 'material_quantity']);
-        $this->recipeDrawer = true;
-    }
-
-    // Agregar material al servicio
-    public function addMaterial()
-    {
-        $this->validate([
-            'material_id_to_add' => 'required|exists:products,id',
-            'material_quantity' => 'required|numeric|min:0.01'
-        ]);
-
-        // Evitar duplicados en la receta
-        if ($this->currentService->materiales()->where('material_id', $this->material_id_to_add)->exists()) {
-            $this->error('Este material ya está en la receta.');
-            return;
-        }
-
-        // Guardar en la tabla intermedia service_materials
-        $this->currentService->materiales()->attach($this->material_id_to_add, [
-            'quantity' => $this->material_quantity
-        ]);
-
-        $this->success('Material agregado a la receta.');
-        $this->reset(['material_id_to_add']);
-        $this->material_quantity = 1;
-    }
-
-    // Quitar material del servicio
-    public function removeMaterial($materialId)
-    {
-        $this->currentService->materiales()->detach($materialId);
-        $this->success('Material removido de la receta.');
-    }
-
-    // --- FIN FUNCIONES RECETA ---
 
     public function with(): array
     {
@@ -177,15 +217,18 @@ new class extends Component {
             }
         }
 
-        // Consultas para la Receta
-        $availableMaterials = Product::where('type', 'Producto')->where('is_active', true)->orderBy('name')->get();
-        $recipeMaterials = $this->currentService ? $this->currentService->materiales : collect();
+        $unidades = $unitsQuery->get();
+
+        if ($this->unit_id && !$unidades->contains('id', $this->unit_id)) {
+            $unidadExtra = Unit::find($this->unit_id);
+            if ($unidadExtra) {
+                $unidades->push($unidadExtra);
+            }
+        }
 
         return [
             'categories' => Category::all(),
-            'units' => $unitsQuery->get(),
-            'availableMaterials' => $availableMaterials,
-            'recipeMaterials' => $recipeMaterials,
+            'units' => $unidades,
             'products' => Product::query()
                 ->when($this->search, fn($q) => $q->where('name', 'like', "%{$this->search}%"))
                 ->with(['categoria', 'unidad'])
@@ -195,7 +238,7 @@ new class extends Component {
             'lowStock' => Product::whereColumn('stock', '<=', 'min_stock')->where('type', 'Producto')->count(),
             'headers' => [
                 ['key' => 'id', 'label' => 'CÓDIGO'],
-                ['key' => 'name', 'label' => 'INSUMO / MATERIAL'],
+                ['key' => 'name', 'label' => 'NOMBRE'],
                 ['key' => 'category.name', 'label' => 'CATEGORÍA'],
                 ['key' => 'stock', 'label' => 'STOCK ACTUAL'],
                 ['key' => 'status', 'label' => 'ESTADO'],
@@ -206,26 +249,25 @@ new class extends Component {
 }; ?>
 
 <div>
-    <x-header title="Inventario de productos" subtitle="Imprenta Minerva">
+    <x-header title="Inventario y Servicios" subtitle="Imprenta Minerva">
         <x-slot:middle class="justify-end!">
-            <x-input icon="o-magnifying-glass" placeholder="Buscar material (ej. papel)..." wire:model.live.debounce.500ms="search" clearable />
+            <x-input icon="o-magnifying-glass" placeholder="Buscar..." wire:model.live.debounce.500ms="search" clearable />
         </x-slot:middle>
         <x-slot:actions>
-            <x-button icon="o-plus" label="Nuevo Producto" class="btn-primary" wire:click="create" />
+            <x-button icon="o-plus" label="Nuevo Registro" class="btn-primary" wire:click="create" />
         </x-slot:actions>
     </x-header>
 
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-        <x-stat title="TOTAL PRODUCTOS" value="{{ $totalProducts }}" description="Registrados en sistema" icon="o-cube" />
-        <x-stat title="ALERTA DE STOCK" value="{{ $lowStock }}" description="Materiales por agotarse" icon="o-exclamation-triangle" color="text-error" class="bg-error/10" />
-        <x-stat title="ÓRDENES ACTIVAS" value="12" description="Consumiendo inventario" icon="o-clipboard-document-check" color="text-success" class="bg-success/10" />
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+        <x-stat title="TOTAL REGISTROS" value="{{ $totalProducts }}" description="Productos y servicios en sistema" icon="o-cube" />
+        <x-stat title="ALERTA DE STOCK" value="{{ $lowStock }}" description="Productos por agotarse" icon="o-exclamation-triangle" color="text-error" class="bg-error/10" />
     </div>
 
     <x-card>
         <x-table :headers="$headers" :rows="$products" with-pagination>
 
             @scope('cell_id', $product)
-                <strong>INS-{{ str_pad($product->id, 3, '0', STR_PAD_LEFT) }}</strong>
+                <strong>{{ $product->type === 'Servicio' ? 'SRV' : 'INS' }}-{{ str_pad($product->id, 3, '0', STR_PAD_LEFT) }}</strong>
             @endscope
 
             @scope('cell_name', $product)
@@ -248,10 +290,22 @@ new class extends Component {
             @endscope
 
             @scope('cell_stock', $product)
-                <span class="font-bold {{ $product->stock <= $product->min_stock ? 'text-error' : '' }}">
-                    {{ $product->stock }}
-                </span>
-                <span class="text-xs text-gray-500">{{ $product->unidad->name ?? 'Und' }}</span>
+                @if($product->type === 'Producto')
+                    <div>
+                        <span class="font-bold {{ $product->stock <= $product->min_stock ? 'text-error' : '' }}">
+                            {{ $product->stock }}
+                        </span>
+                        <span class="text-xs text-gray-500">{{ $product->unidad->name ?? 'Und' }}</span>
+                    </div>
+
+                    @if(($product->items_per_unit ?? 1) > 1)
+                        <div class="text-xs text-info font-medium mt-1">
+                            = {{ $product->stock * $product->items_per_unit }} unid. base
+                        </div>
+                    @endif
+                @else
+                    <span class="text-gray-400 italic">N/A</span>
+                @endif
             @endscope
 
             @scope('cell_status', $product)
@@ -267,16 +321,16 @@ new class extends Component {
             @endscope
 
             @scope('cell_actions', $product)
-                <div class="flex gap-2">
-
-                    @if($product->type === 'Servicio')
-                        <x-button icon="o-beaker" wire:click="openRecipe({{ $product->id }})" tooltip="Configurar Receta" spinner class="btn-sm btn-circle btn-ghost text-info" />
+                <div class="flex gap-2 items-center">
+                    {{-- Botón dinámico: Solo aparece si el paquete contiene unidades desglosables y está activo --}}
+                    @if($product->type === 'Producto' && ($product->items_per_unit ?? 1) > 1 && $product->is_active)
+                        <x-button icon="o-archive-box" wire:click="openPackage({{ $product->id }})" tooltip="Abrir Empaque" spinner class="btn-sm btn-circle btn-ghost text-info" />
                     @endif
 
                     <x-button icon="o-pencil" wire:click="edit({{ $product->id }})" tooltip="Editar" spinner class="btn-sm btn-circle btn-ghost" />
 
                     @if($product->is_active)
-                        <x-button icon="o-trash" wire:click="toggleActive({{ $product->id }})" wire:confirm="¿Desactivar este producto?" tooltip="Desactivar" spinner class="btn-sm btn-circle btn-ghost text-error" />
+                        <x-button icon="o-trash" wire:click="toggleActive({{ $product->id }})" wire:confirm="¿Desactivar este registro?" tooltip="Desactivar" spinner class="btn-sm btn-circle btn-ghost text-error" />
                     @else
                         <x-button icon="o-arrow-path" wire:click="toggleActive({{ $product->id }})" tooltip="Activar" spinner class="btn-sm btn-circle btn-ghost text-success" />
                     @endif
@@ -290,8 +344,14 @@ new class extends Component {
         <x-form wire:submit="save">
             <x-input label="Nombre del producto o servicio" wire:model="name" placeholder="Ej: Cartulina Hilo" icon="o-document-text" />
 
-            <div class="grid grid-cols-2 gap-4">
-                <x-select label="Categoría" wire:model.live="category_id" :options="$categories" placeholder="Seleccione..." />
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="flex items-end gap-2">
+                    <div class="flex-1">
+                        <x-select label="Categoría" wire:model.live="category_id" :options="$categories" placeholder="Seleccione..." />
+                    </div>
+                    <x-button icon="o-plus" class="btn-primary btn-square" wire:click="$set('categoryModal', true)" tooltip="Nueva Categoría" />
+                </div>
+
                 <x-select label="Tipo" wire:model.live="type" :options="[['id'=>'Producto', 'name'=>'Producto'], ['id'=>'Servicio', 'name'=>'Servicio']]" placeholder="Seleccione..." />
             </div>
 
@@ -305,12 +365,20 @@ new class extends Component {
                 <x-input label="Precio Venta" wire:model="sale_price" prefix="C$" type="number" step="0.01" />
             </div>
 
-            <div class="grid grid-cols-2 gap-4">
-                <x-input label="Stock Inicial" wire:model="stock" icon="o-cube" type="number" />
-                <x-input label="Stock Mínimo" wire:model="min_stock" icon="o-bell-alert" type="number" />
-            </div>
+            @if($type === 'Producto')
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <x-input label="Stock Inicial" wire:model="stock" icon="o-cube" type="number" />
+                    <x-input label="Stock Mínimo" wire:model="min_stock" icon="o-bell-alert" type="number" />
+                    <x-input label="Cant. por empaque" wire:model="items_per_unit" icon="o-arrows-pointing-out" type="number" step="0.01" hint="Ej: 500 para hojas en 1 resma." />
+                </div>
+            @endif
 
-            <x-select label="Unidad de Medida" wire:model="unit_id" :options="$units" placeholder="Seleccione unidad..." />
+            <div class="flex items-end gap-2">
+                <div class="flex-1">
+                    <x-select label="Unidad de Medida" wire:model="unit_id" :options="$units" placeholder="Seleccione unidad principal..." />
+                </div>
+                <x-button icon="o-plus" class="btn-primary btn-square" wire:click="$set('unitModal', true)" tooltip="Nueva Unidad" />
+            </div>
 
             <x-slot:actions>
                 <x-button label="Cancelar" @click="$wire.drawerModal = false" class="btn-ghost" />
@@ -319,43 +387,25 @@ new class extends Component {
         </x-form>
     </x-drawer>
 
-    <x-drawer wire:model="recipeDrawer" title="Materiales para: {{ $currentService?->name }}" right separator with-close-button class="lg:w-1/3">
-
-        <div class="text-sm text-gray-500 mb-4">
-            Agrega los insumos que se consumen automáticamente cada vez que se vende este servicio.
-        </div>
-
-        <x-form wire:submit="addMaterial">
-            <x-select label="Seleccionar Material" wire:model="material_id_to_add" :options="$availableMaterials" placeholder="Buscar insumo..." searchable />
-
-            <x-input label="Cantidad a descontar por servicio" wire:model="material_quantity" type="number" step="0.01" hint="Ej: 0.5 (medio pliego), 2 (dos unidades)." />
-
-            <x-button label="Agregar a la Receta" type="submit" icon="o-plus" class="btn-info btn-sm text-white w-full" spinner="addMaterial" />
+    <!-- MODAL: Nueva Categoría -->
+    <x-modal wire:model="categoryModal" title="Nueva Categoría" separator>
+        <x-form wire:submit="saveCategory">
+            <x-input label="Nombre de la Categoría" wire:model="newCategoryName" placeholder="Ej: Sublimación" required />
+            <x-slot:actions>
+                <x-button label="Cancelar" wire:click="$set('categoryModal', false)" class="btn-ghost" />
+                <x-button label="Guardar" type="submit" class="btn-primary" spinner="saveCategory" />
+            </x-slot:actions>
         </x-form>
+    </x-modal>
 
-       <hr class="my-6 border-base-300" />
-
-        <div class="font-bold mb-3 text-lg">Materiales Actuales</div>
-
-        <div class="space-y-2">
-            @if($currentService && $recipeMaterials->count() > 0)
-                @foreach($recipeMaterials as $mat)
-                    <div class="flex justify-between items-center p-3 bg-base-200 rounded-lg shadow-sm">
-                        <div>
-                            <div class="font-bold text-sm">{{ $mat->name }}</div>
-                            <div class="text-xs text-primary font-bold">
-                                Consume: {{ $mat->pivot->quantity }} {{ $mat->unidad->name ?? 'Und' }}
-                            </div>
-                        </div>
-                        <x-button icon="o-trash" wire:click="removeMaterial({{ $mat->id }})" wire:confirm="¿Quitar material?" class="btn-sm btn-circle btn-ghost text-error" spinner />
-                    </div>
-                @endforeach
-            @else
-                <div class="text-sm text-gray-400 text-center p-4 border border-dashed rounded-lg">
-                    Aún no has agregado materiales a esta receta.
-                </div>
-            @endif
-        </div>
-    </x-drawer>
-
+    <!-- MODAL: Nueva Unidad -->
+    <x-modal wire:model="unitModal" title="Nueva Unidad de Medida" separator>
+        <x-form wire:submit="saveUnit">
+            <x-input label="Nombre de la Unidad" wire:model="newUnitName" placeholder="Ej: Galón" required />
+            <x-slot:actions>
+                <x-button label="Cancelar" wire:click="$set('unitModal', false)" class="btn-ghost" />
+                <x-button label="Guardar" type="submit" class="btn-primary" spinner="saveUnit" />
+            </x-slot:actions>
+        </x-form>
+    </x-modal>
 </div>

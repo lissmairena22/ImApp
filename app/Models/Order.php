@@ -11,8 +11,10 @@ class Order extends Model
         'type', 'priority', 'status', 'estimated_price', 'advance_payment'
     ];
 
-    public function cliente() { return $this->belongsTo(Client::class); }
-public function usuario() { return $this->belongsTo(User::class, 'user_id'); }
+public function cliente()
+{
+    return $this->belongsTo(Client::class, 'client_id');
+}public function usuario() { return $this->belongsTo(User::class, 'user_id'); }
 public function items() { return $this->hasMany(OrderItem::class); }
 public function produccion() { return $this->hasOne(Production::class); }
 public function factura() { return $this->hasOne(Invoice::class); }

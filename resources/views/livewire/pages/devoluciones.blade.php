@@ -45,7 +45,7 @@ new class extends Component {
         $term = trim($this->searchInvoice);
 
         if (empty($term)) {
-            $this->error('Ingrese un numero de factura.', position: 'toast-top toast-center');
+            $this->error('Ingrese un número de factura.', position: 'toast-top toast-center');
             return;
         }
 
@@ -69,12 +69,12 @@ new class extends Component {
         }
 
         if ($foundInvoice->status !== 'Pagada') {
-            $this->error('No se puede reembolsar: la factura esta en estado "' . $foundInvoice->status . '".', position: 'toast-top toast-center');
+            $this->error('No se puede reembolsar: la factura está en estado "' . $foundInvoice->status . '".', position: 'toast-top toast-center');
             return;
         }
 
         if ($foundInvoice->order_id && $foundInvoice->order?->status === 'EnProceso') {
-            $this->error('No se puede reembolsar desde aqui: el pedido esta en produccion.', position: 'toast-top toast-center');
+            $this->error('No se puede reembolsar desde aquí: el pedido está en producción.', position: 'toast-top toast-center');
             return;
         }
 
@@ -93,6 +93,9 @@ new class extends Component {
 
             $type = $item->product->type ?? 'Servicio';
 
+            // Evaluamos si el producto permite devoluciones (asume true si la columna no existe aún)
+            $isReturnable = isset($item->product->is_returnable) ? (bool) $item->product->is_returnable : true;
+
             $this->items[$item->id] = [
                 'id' => $item->id,
                 'product_id' => $item->product_id,
@@ -107,6 +110,7 @@ new class extends Component {
                 'unit' => $item->product->unidad->name ?? 'Und',
                 'return_to_stock' => $type === 'Producto',
                 'restore_materials' => $type === 'Servicio' && $this->canRestoreServiceMaterials,
+                'is_returnable' => $isReturnable,
                 'materials' => $item->materialConsumptions
                     ->map(fn($material) => [
                         'name' => $material->material_name,
@@ -132,6 +136,10 @@ new class extends Component {
     private function calculateTotal(): void
     {
         $this->totalToReturn = round(collect($this->items)->sum(function ($item) {
+            if (!$item['is_returnable']) {
+                return 0;
+            }
+
             $qty = (float) $item['qty_to_return'];
 
             if ($qty < 0 || $qty > (float) $item['max_qty']) {
@@ -147,7 +155,7 @@ new class extends Component {
         $this->calculateTotal();
 
         if ($this->totalToReturn <= 0 || trim($this->reason) === '') {
-            $this->error('Indique una cantidad valida y el motivo.', position: 'toast-top toast-center');
+            $this->error('Indique una cantidad válida a devolver y el motivo.', position: 'toast-top toast-center');
             return;
         }
 
@@ -158,7 +166,7 @@ new class extends Component {
         $this->invoice->refresh();
 
         if ($this->invoice->status !== 'Pagada') {
-            $this->error('La factura ya no es apta para devolucion.', position: 'toast-top toast-center');
+            $this->error('La factura ya no es apta para devolución.', position: 'toast-top toast-center');
             return;
         }
 
@@ -173,6 +181,10 @@ new class extends Component {
                 ]);
 
                 foreach ($this->items as $item) {
+                    if (!$item['is_returnable']) {
+                        continue;
+                    }
+
                     $qty = (float) $item['qty_to_return'];
 
                     if ($qty <= 0) {
@@ -203,7 +215,7 @@ new class extends Component {
                 }
             });
 
-            $this->success('Devolucion procesada con exito.', position: 'toast-top toast-center');
+            $this->success('Devolución procesada con éxito.', position: 'toast-top toast-center');
             $this->reset(['invoice', 'items', 'searchInvoice', 'totalToReturn', 'reason', 'suggestions']);
             $this->invoiceFactor = 1;
             $this->canRestoreServiceMaterials = false;
@@ -221,10 +233,14 @@ new class extends Component {
     private function quantitiesAreValid(): bool
     {
         foreach ($this->items as $item) {
+            if (!$item['is_returnable']) {
+                continue;
+            }
+
             $qty = (float) $item['qty_to_return'];
 
             if ($qty < 0 || $qty > (float) $item['max_qty']) {
-                $this->error("Cantidad invalida para {$item['description']}. Maximo: {$item['max_qty']}.", position: 'toast-top toast-center');
+                $this->error("Cantidad inválida para {$item['description']}. Máximo: {$item['max_qty']}.", position: 'toast-top toast-center');
                 return false;
             }
         }
@@ -294,7 +310,7 @@ new class extends Component {
             'cash_register_id' => $openRegister->id,
             'user_id' => auth()->id() ?? 1,
             'type' => 'Egreso',
-            'concept' => 'Devolucion Factura: ' . $this->invoice->invoice_number,
+            'concept' => 'Devolución Factura: ' . $this->invoice->invoice_number,
             'amount' => $this->totalToReturn,
             'movement_date' => now(),
             'created_at' => now(),
@@ -305,6 +321,10 @@ new class extends Component {
     private function isFullReturn(): bool
     {
         $remainingAfterReturn = collect($this->items)->sum(function ($item) {
+            // Si el item no es retornable, asumimos que siempre "quedará" en la factura
+            if (!$item['is_returnable']) {
+                return (float) $item['max_qty'];
+            }
             return max(0, (float) $item['max_qty'] - (float) $item['qty_to_return']);
         });
 
@@ -316,8 +336,8 @@ new class extends Component {
     <div class="max-w-6xl mx-auto space-y-6">
         <div class="bg-white p-8 rounded-2xl shadow-sm border border-gray-200">
             <div class="mb-6">
-                <h2 class="text-2xl font-black text-gray-800 uppercase tracking-tight">Modulo de Devoluciones</h2>
-                <p class="text-gray-500 text-sm">Busca una factura para realizar una devolucion parcial o total.</p>
+                <h2 class="text-2xl font-black text-gray-800 uppercase tracking-tight">Módulo de Devoluciones</h2>
+                <p class="text-gray-500 text-sm">Busca una factura para realizar una devolución parcial o total.</p>
             </div>
 
             <div class="relative">
@@ -329,7 +349,7 @@ new class extends Component {
                            wire:model.live.debounce.300ms="searchInvoice"
                            wire:keydown.enter="findInvoice"
                            class="flex-1 bg-transparent border-none focus:ring-0 text-lg font-medium"
-                           placeholder="Escriba el numero de factura (Ej: FAC-102)...">
+                           placeholder="Escriba el número de factura (Ej: FAC-102)...">
                     <button wire:click="findInvoice"
                             class="bg-indigo-600 text-white px-8 py-3 rounded-xl font-bold hover:bg-indigo-700 transition transform active:scale-95 shadow-md">
                         BUSCAR
@@ -373,7 +393,7 @@ new class extends Component {
                         <table class="w-full text-left">
                             <thead class="text-[10px] uppercase text-gray-400 font-black border-b bg-white">
                                 <tr>
-                                    <th class="px-6 py-4">Descripcion</th>
+                                    <th class="px-6 py-4">Descripción</th>
                                     <th class="px-6 py-4 text-center">Disponible</th>
                                     <th class="px-6 py-4 text-center">A devolver</th>
                                     <th class="px-6 py-4 text-right">Reembolso</th>
@@ -381,13 +401,18 @@ new class extends Component {
                             </thead>
                             <tbody class="divide-y divide-gray-100">
                                 @foreach($items as $id => $item)
-                                    <tr class="hover:bg-gray-50/50 transition">
+                                    <tr class="hover:bg-gray-50/50 transition {{ !$item['is_returnable'] ? 'opacity-70 bg-gray-50' : '' }}">
                                         <td class="px-6 py-5">
                                             <p class="font-bold text-gray-800">{{ $item['description'] }}</p>
                                             <div class="flex flex-wrap gap-1 mt-1">
                                                 <span class="inline-block px-2 py-0.5 rounded text-[10px] font-bold {{ $item['type'] == 'Producto' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700' }}">
                                                     {{ strtoupper($item['type']) }}
                                                 </span>
+                                                @if(!$item['is_returnable'])
+                                                    <span class="inline-block px-2 py-0.5 rounded text-[10px] font-bold bg-red-100 text-red-700 uppercase">
+                                                        No Retornable
+                                                    </span>
+                                                @endif
                                                 @if($item['already_returned'] > 0)
                                                     <span class="inline-block px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-600">
                                                         Devuelto: {{ number_format($item['already_returned'], 2) }}
@@ -395,37 +420,49 @@ new class extends Component {
                                                 @endif
                                             </div>
 
-                                            @if($item['type'] === 'Producto')
-                                                <label class="mt-3 flex items-center gap-2 text-[11px] font-bold text-emerald-700">
-                                                    <input type="checkbox" wire:model.live="items.{{ $id }}.return_to_stock" class="rounded border-gray-300 text-emerald-600 focus:ring-emerald-500">
-                                                    Reintegrar al inventario
-                                                </label>
-                                            @elseif(!empty($item['materials']))
-                                                <div class="mt-3 space-y-1">
-                                                    @foreach($item['materials'] as $material)
-                                                        <div class="text-[10px] text-gray-500 bg-gray-50 border border-gray-100 rounded px-2 py-1">
-                                                            Material usado: <b>{{ $material['name'] }}</b>
-                                                            ({{ number_format($material['total_consumed'], 2) }} {{ $material['unit'] }})
-                                                        </div>
-                                                    @endforeach
-                                                </div>
-                                                <label class="mt-2 flex items-center gap-2 text-[11px] font-bold {{ $canRestoreServiceMaterials ? 'text-indigo-700' : 'text-gray-400' }}">
-                                                    <input type="checkbox" wire:model.live="items.{{ $id }}.restore_materials" @disabled(!$canRestoreServiceMaterials) class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
-                                                    Reintegrar materiales no producidos
-                                                </label>
+                                            @if($item['is_returnable'])
+                                                @if($item['type'] === 'Producto')
+                                                    <label class="mt-3 flex items-center gap-2 text-[11px] font-bold text-emerald-700 cursor-pointer">
+                                                        <input type="checkbox" wire:model.live="items.{{ $id }}.return_to_stock" class="rounded border-gray-300 text-emerald-600 focus:ring-emerald-500">
+                                                        Reintegrar al inventario
+                                                    </label>
+                                                @elseif(!empty($item['materials']))
+                                                    <div class="mt-3 space-y-1">
+                                                        @foreach($item['materials'] as $material)
+                                                            <div class="text-[10px] text-gray-500 bg-gray-50 border border-gray-100 rounded px-2 py-1">
+                                                                Material usado: <b>{{ $material['name'] }}</b>
+                                                                ({{ number_format($material['total_consumed'], 2) }} {{ $material['unit'] }})
+                                                            </div>
+                                                        @endforeach
+                                                    </div>
+                                                    <label class="mt-2 flex items-center gap-2 text-[11px] font-bold {{ $canRestoreServiceMaterials ? 'text-indigo-700 cursor-pointer' : 'text-gray-400' }}">
+                                                        <input type="checkbox" wire:model.live="items.{{ $id }}.restore_materials" @disabled(!$canRestoreServiceMaterials) class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
+                                                        Reintegrar materiales no producidos
+                                                    </label>
+                                                @endif
+                                            @else
+                                                <p class="text-[10px] text-gray-400 mt-2 italic">Este servicio es de consumo final y no admite reembolsos.</p>
                                             @endif
                                         </td>
                                         <td class="px-6 py-5 text-center font-medium text-gray-500">
                                             {{ number_format($item['max_qty'], 2) }} {{ $item['unit'] }}
                                         </td>
                                         <td class="px-6 py-5 text-center">
-                                            <input type="number"
-                                                   wire:model.live="items.{{ $id }}.qty_to_return"
-                                                   max="{{ $item['max_qty'] }}" min="0" step="0.01"
-                                                   class="w-24 border-gray-200 rounded-lg text-center font-bold text-indigo-600 focus:ring-indigo-500">
+                                            @if($item['is_returnable'])
+                                                <input type="number"
+                                                       wire:model.live="items.{{ $id }}.qty_to_return"
+                                                       max="{{ $item['max_qty'] }}" min="0" step="0.01"
+                                                       class="w-24 border-gray-200 rounded-lg text-center font-bold text-indigo-600 focus:ring-indigo-500">
+                                            @else
+                                                <span class="text-gray-300 font-bold">-</span>
+                                            @endif
                                         </td>
-                                        <td class="px-6 py-5 text-right font-black text-gray-700">
-                                            C$ {{ number_format((float) $item['qty_to_return'] * (float) $item['gross_unit_price'], 2) }}
+                                        <td class="px-6 py-5 text-right font-black {{ $item['is_returnable'] ? 'text-gray-700' : 'text-gray-400' }}">
+                                            @if($item['is_returnable'])
+                                                C$ {{ number_format((float) $item['qty_to_return'] * (float) $item['gross_unit_price'], 2) }}
+                                            @else
+                                                C$ 0.00
+                                            @endif
                                         </td>
                                     </tr>
                                 @endforeach
@@ -436,7 +473,7 @@ new class extends Component {
 
                 <div class="lg:col-span-4 space-y-6">
                     <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-200 sticky top-6">
-                        <h3 class="font-black text-gray-800 uppercase text-sm mb-4 border-b pb-2">Finalizar Devolucion</h3>
+                        <h3 class="font-black text-gray-800 uppercase text-sm mb-4 border-b pb-2">Finalizar Devolución</h3>
 
                         <div class="space-y-4">
                             <div class="p-3 bg-indigo-50 rounded-xl border border-indigo-100 text-xs text-indigo-700 font-medium">
@@ -447,7 +484,7 @@ new class extends Component {
                                 <label class="block text-[10px] font-bold text-gray-400 uppercase mb-1">Motivo</label>
                                 <textarea wire:model="reason" rows="3"
                                           class="w-full border-gray-200 rounded-xl text-sm focus:ring-indigo-500 focus:border-indigo-500"
-                                          placeholder="Ej: Cliente cancelo, error de impresion, producto danado..."></textarea>
+                                          placeholder="Ej: Cliente canceló, error de impresión, producto dañado..."></textarea>
                             </div>
 
                             <div class="p-4 bg-rose-50 rounded-xl border border-rose-100 text-center">
