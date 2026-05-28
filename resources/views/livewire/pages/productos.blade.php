@@ -231,7 +231,7 @@ new class extends Component {
             'units' => $unidades,
             'products' => Product::query()
                 ->when($this->search, fn($q) => $q->where('name', 'like', "%{$this->search}%"))
-                ->with(['categoria', 'unidad'])
+                ->with(['category', 'unit'])
                 ->orderBy('id', 'desc')
                 ->paginate(10),
             'totalProducts' => Product::count(),
@@ -286,7 +286,7 @@ new class extends Component {
             @endscope
 
             @scope('cell_category.name', $product)
-                <x-badge :value="$product->categoria->name ?? 'N/A'" class="badge-ghost" />
+                <x-badge :value="$product->category->name ?? 'N/A'" class="badge-ghost" />
             @endscope
 
             @scope('cell_stock', $product)
@@ -295,7 +295,7 @@ new class extends Component {
                         <span class="font-bold {{ $product->stock <= $product->min_stock ? 'text-error' : '' }}">
                             {{ $product->stock }}
                         </span>
-                        <span class="text-xs text-gray-500">{{ $product->unidad->name ?? 'Und' }}</span>
+                        <span class="text-xs text-gray-500">{{ $product->unit->name ?? 'Und' }}</span>
                     </div>
 
                     @if(($product->items_per_unit ?? 1) > 1)

@@ -1,8 +1,27 @@
 <?php
 namespace App\Models;
-use Illuminate\Database\Eloquent\Model;
 
-class Unit extends Model {
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Str;
+
+class Unit extends Model
+{
+    use HasFactory;
+
     protected $fillable = ['name', 'abbreviation'];
-    public function productos() { return $this->hasMany(Product::class); }
+
+    protected static function booted()
+    {
+        static::creating(function ($unit) {
+            if (empty($unit->abbreviation)) {
+                $unit->abbreviation = Str::upper(Str::substr($unit->name, 0, 3));
+            }
+        });
+    }
+
+    public function products()
+    {
+        return $this->hasMany(Product::class);
+    }
 }

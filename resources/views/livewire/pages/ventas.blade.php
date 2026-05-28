@@ -62,7 +62,7 @@ new class extends Component {
                 ->limit(8)->get(),
 
             // Solo materiales (no sellables)
-            'availableMaterials' => Product::with('unidad')
+            'availableMaterials' => Product::with('unit')
                 ->where('type', 'Producto')
                 ->where('is_sellable', false)
                 ->where('is_active', true)
@@ -304,7 +304,7 @@ new class extends Component {
     }
 
     private function cartItemFromProduct(Product $product): array {
-        $product->loadMissing(['unidad']);
+        $product->loadMissing(['unit']);
 
         return [
             'id'                       => $product->id,
@@ -313,7 +313,7 @@ new class extends Component {
             'quantity'                 => 1,
             'type'                     => $product->type,
             'stock'                    => (float) $product->stock,
-            'unit'                     => $product->unidad->name ?? 'Und',
+            'unit'                     => $product->unit->name ?? 'Und',
             'requires_production'      => (bool) $product->requires_production,
             'measurements'             => '',
 
@@ -386,13 +386,13 @@ new class extends Component {
     private function validateMaterialStock(): bool {
         foreach ($this->cart as $item) {
             if ($item['type'] === 'Servicio' && !empty($item['selected_material_id'])) {
-                $material = Product::with('unidad')->find($item['selected_material_id']);
+                $material = Product::with('unit')->find($item['selected_material_id']);
 
                 // Nueva lógica: Cantidad del servicio + Merma
                 $needed = (float)$item['quantity'] + (float)$item['material_lost'];
 
                 if (!$material || $needed > (float) $material->stock) {
-                    $available = $material ? number_format((float) $material->stock, 2) . ' ' . ($material->unidad->name ?? 'Und') : '0';
+                    $available = $material ? number_format((float) $material->stock, 2) . ' ' . ($material->unit->name ?? 'Und') : '0';
                     $this->error("Material insuficiente para {$item['name']}. Disponible: {$available}.", position: 'toast-top toast-center');
                     return false;
                 }
@@ -410,7 +410,7 @@ new class extends Component {
             $product = Product::find($item['id']);
 
             if (!$product || (float) $item['quantity'] > (float) $product->stock) {
-                $available = $product ? number_format((float) $product->stock, 2) . ' ' . ($product->unidad->name ?? 'Und') : '0';
+                $available = $product ? number_format((float) $product->stock, 2) . ' ' . ($product->unit->name ?? 'Und') : '0';
                 $this->error("Stock insuficiente para {$item['name']}. Disponible: {$available}.", position: 'toast-top toast-center');
                 return false;
             }
@@ -423,7 +423,7 @@ new class extends Component {
             return;
         }
 
-        $material = Product::with('unidad')->lockForUpdate()->find($item['selected_material_id']);
+        $material = Product::with('unit')->lockForUpdate()->find($item['selected_material_id']);
         if (!$material) return;
 
         $used = (float)$item['quantity'];
@@ -440,7 +440,7 @@ new class extends Component {
                 'invoice_item_id'          => $invoiceItemId,
                 'material_id'              => $material->id,
                 'material_name'            => $material->name,
-                'unit_name'                => $material->unidad->name ?? 'Und',
+                'unit_name'                => $material->unit->name ?? 'Und',
                 'available_stock_snapshot' => $material->stock,
                 'quantity_per_service'     => 1, // Se mantiene en 1 para evitar errores de DB
                 'quantity_used'            => $used,

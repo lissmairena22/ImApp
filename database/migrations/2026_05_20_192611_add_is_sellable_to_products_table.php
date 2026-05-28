@@ -11,11 +11,11 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::table('products', function (Blueprint $table) {
-            // Agregamos la columna 'is_sellable'
-            // 'default(true)' hace que por defecto los productos sí se puedan vender
-            $table->boolean('is_sellable')->default(true);
-        });
+        if (!Schema::hasColumn('products', 'is_sellable')) {
+            Schema::table('products', function (Blueprint $table) {
+                $table->boolean('is_sellable')->default(true);
+            });
+        }
     }
 
     /**
@@ -23,9 +23,10 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::table('products', function (Blueprint $table) {
-            // Si alguna vez revertimos la migración, borramos la columna
-            $table->dropColumn('is_sellable');
-        });
+        if (Schema::hasColumn('products', 'is_sellable')) {
+            Schema::table('products', function (Blueprint $table) {
+                $table->dropColumn('is_sellable');
+            });
+        }
     }
 };

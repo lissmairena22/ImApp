@@ -4,8 +4,10 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 use Livewire\Volt\Volt;
 
+// Rutas Públicas (Guest)
 Volt::route('/login', 'auth.login')->name('login')->middleware('guest');
 
+// Rutas Privadas (Auth)
 Route::middleware(['auth'])->group(function () {
     Volt::route('/', 'pages.menu')->name('dashboard');
 

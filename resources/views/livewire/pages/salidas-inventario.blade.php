@@ -22,8 +22,8 @@ new class extends Component {
     public function registerOutput(int $orderId): void
     {
         $order = Order::with([
-                'cliente',
-                'items.producto.unidad',
+                'client',
+                'items.product.unit',
                 'items.materialConsumptions.material',
             ])
             ->where('status', 'Cancelado')
@@ -45,14 +45,14 @@ new class extends Component {
                 ]);
 
                 foreach ($order->items as $item) {
-                    if (($item->producto?->type ?? null) === 'Producto') {
+                    if (($item->product?->type ?? null) === 'Producto') {
                         InventoryOutputItem::create([
                             'inventory_output_id' => $output->id,
                             'product_id' => $item->product_id,
                             'description' => $item->description,
                             'source_type' => 'Producto cancelado',
                             'quantity' => $item->quantity,
-                            'unit_name' => $item->producto->unidad->name ?? 'Und',
+                            'unit_name' => $item->product->unit->name ?? 'Und',
                             'material_lost' => 0,
                             'affects_stock' => false,
                         ]);
@@ -84,23 +84,23 @@ new class extends Component {
     {
         $cancelledOrders = Order::query()
             ->with([
-                'cliente',
-                'factura',
-                'items.producto.unidad',
+                'client',
+                'invoice',
+                'items.product.unit',
                 'items.materialConsumptions.material',
             ])
             ->where('status', 'Cancelado')
             ->whereDoesntHave('inventoryOutput')
             ->when($this->search, function ($query) {
                 $query->where('id', 'like', "%{$this->search}%")
-                    ->orWhereHas('cliente', fn($q) => $q->where('name', 'like', "%{$this->search}%"));
+                    ->orWhereHas('client', fn($q) => $q->where('name', 'like', "%{$this->search}%"));
             })
             ->orderBy('id', 'desc')
             ->paginate(8);
 
         return [
             'cancelledOrders' => $cancelledOrders,
-            'recentOutputs' => InventoryOutput::with(['order.cliente', 'items'])->latest()->limit(8)->get(),
+            'recentOutputs' => InventoryOutput::with(['order.client', 'items'])->latest()->limit(8)->get(),
             'pendingOutputs' => Order::where('status', 'Cancelado')->whereDoesntHave('inventoryOutput')->count(),
             'registeredOutputs' => InventoryOutput::count(),
         ];
@@ -141,9 +141,9 @@ new class extends Component {
                             <span class="font-black text-indigo-900">ORD-{{ str_pad($order->id, 3, '0', STR_PAD_LEFT) }}</span>
                             <span class="px-2 py-0.5 rounded-full bg-red-100 text-red-700 text-[10px] font-black uppercase">Cancelado</span>
                         </div>
-                        <p class="text-sm text-gray-600 font-medium">{{ $order->cliente->name ?? 'Sin cliente' }}</p>
+                        <p class="text-sm text-gray-600 font-medium">{{ $order->client->name ?? 'Sin cliente' }}</p>
                         <p class="text-[10px] text-gray-400 uppercase font-bold">
-                            {{ $order->factura->invoice_number ?? 'Sin factura' }} · C$ {{ number_format($order->estimated_price, 2) }}
+                            {{ $order->invoice->invoice_number ?? 'Sin factura' }} · C$ {{ number_format($order->estimated_price, 2) }}
                         </p>
                     </div>
                     <x-button label="Registrar salida"
@@ -166,13 +166,13 @@ new class extends Component {
                         </thead>
                         <tbody class="divide-y divide-gray-100">
                             @foreach($order->items as $item)
-                                @if(($item->producto?->type ?? null) === 'Producto')
+                                @if(($item->product?->type ?? null) === 'Producto')
                                     <tr>
                                         <td class="px-5 py-3 font-bold text-gray-700">{{ $item->description }}</td>
                                         <td class="px-5 py-3">
                                             <span class="px-2 py-0.5 rounded bg-emerald-100 text-emerald-700 text-[10px] font-bold">Producto cancelado</span>
                                         </td>
-                                        <td class="px-5 py-3 text-right font-black">{{ number_format((float) $item->quantity, 2) }} {{ $item->producto->unidad->name ?? 'Und' }}</td>
+                                        <td class="px-5 py-3 text-right font-black">{{ number_format((float) $item->quantity, 2) }} {{ $item->product->unit->name ?? 'Und' }}</td>
                                         <td class="px-5 py-3 text-right text-gray-400">0.00</td>
                                     </tr>
                                 @endif
@@ -215,7 +215,7 @@ new class extends Component {
                     <div>
                         <p class="font-black text-gray-800">
                             ORD-{{ str_pad($output->order_id, 3, '0', STR_PAD_LEFT) }}
-                            <span class="text-xs text-gray-400 font-bold">· {{ $output->order->cliente->name ?? 'Sin cliente' }}</span>
+                            <span class="text-xs text-gray-400 font-bold">· {{ $output->order->client->name ?? 'Sin cliente' }}</span>
                         </p>
                         <p class="text-xs text-gray-500">{{ $output->reason }} · {{ $output->items->count() }} conceptos</p>
                     </div>
