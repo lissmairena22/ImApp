@@ -107,7 +107,7 @@ new class extends Component {
                 'unit_price' => (float) $item->unit_price,
                 'gross_unit_price' => round((float) $item->unit_price * $this->invoiceFactor, 2),
                 'type' => $type,
-                'unit' => $item->product->unidad->name ?? 'Und',
+                'unit' => $item->product->unit->name ?? 'Und',
                 'return_to_stock' => $type === 'Producto',
                 'restore_materials' => $type === 'Servicio' && $this->canRestoreServiceMaterials,
                 'is_returnable' => $isReturnable,

@@ -19,12 +19,12 @@ class Client extends Model
         'is_active'
     ];
 
-    public function facturas()
+    public function invoices()
     {
         return $this->hasMany(Invoice::class);
     }
 
-    public function pedidos()
+    public function orders()
     {
         return $this->hasMany(Order::class);
     }

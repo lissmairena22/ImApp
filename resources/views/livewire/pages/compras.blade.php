@@ -68,14 +68,14 @@ new class extends Component {
     {
         return strlen($this->busqueda_producto) < 1 ? [] : Product::where('is_active', true)
             ->where('type', 'Producto') // <-- FILTRO APLICADO
-            ->where('name', 'like', "%{$this->busqueda_producto}%")->with('unidad')->limit(6)->get()->toArray();
+            ->where('name', 'like', "%{$this->busqueda_producto}%")->with('unit')->limit(6)->get()->toArray();
     }
 
     public function seleccionarProducto(int $id): void
     {
-        $p = Product::where('is_active', true)->with('unidad')->findOrFail($id);
+        $p = Product::where('is_active', true)->with('unit')->findOrFail($id);
         $this->producto_id = $p->id; $this->busqueda_producto = $p->name; $this->codigo_producto = (string) $p->id;
-        $this->unidad_medida = $p->unidad->name ?? ''; $this->precio_compra = ''; $this->precio_venta = (string) $p->sale_price;
+        $this->unidad_medida = $p->unit->name ?? ''; $this->precio_compra = ''; $this->precio_venta = (string) $p->sale_price;
         $this->mostrar_productos = false;
     }
 

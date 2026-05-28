@@ -13,12 +13,12 @@ class User extends Authenticatable
     protected $fillable = ['name', 'username', 'password', 'role', 'status'];
     protected $hidden = ['password', 'remember_token'];
 
-    public function cajas()
+    public function cashRegisters()
     {
         return $this->hasMany(CashRegister::class);
     }
 
-    public function pedidos()
+    public function orders()
     {
         return $this->hasMany(Order::class);
     }
