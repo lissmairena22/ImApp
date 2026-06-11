@@ -111,7 +111,7 @@ new class extends Component {
             'is_sellable' => 'boolean',
         ]);
 
-        // 1. Guardar el producto principal (Padre)
+        // Guardar el producto principal (Padre)
         $product = Product::updateOrCreate(
             ['id' => $this->product_id],
             [
@@ -129,10 +129,7 @@ new class extends Component {
             ]
         );
 
-        // 2. Automatización: Si es un registro NUEVO, es un Producto y contiene más de 1 unidad base
         if (!$this->product_id && $this->type === 'Producto' && $this->items_per_unit > 1) {
-
-            // Busca la unidad "Unidad" o la crea si no existe para asignársela al hijo
             $unidadSuela = Unit::firstOrCreate(['name' => 'Unidad']);
 
             Product::create([
@@ -140,15 +137,14 @@ new class extends Component {
                 'category_id' => $this->category_id,
                 'unit_id' => $unidadSuela->id,
                 'type' => 'Producto',
-                // Calcula costos y precios proporcionales para el ítem desglosado
                 'sale_price' => $this->sale_price / $this->items_per_unit,
                 'cost_price' => ($this->cost_price ?: 0) / $this->items_per_unit,
-                'stock' => 0, // Inicia en cero hasta que se abra un paquete
+                'stock' => 0,
                 'min_stock' => 0,
                 'items_per_unit' => 1,
                 'is_active' => true,
-                'is_sellable' => false, // Marcado como uso interno para los servicios/impresiones
-                'parent_id' => $product->id // Relación jerárquica
+                'is_sellable' => false,
+                'parent_id' => $product->id
             ]);
         }
 
@@ -156,7 +152,6 @@ new class extends Component {
         $this->success($this->isEditMode ? 'Registro actualizado' : 'Registro y unidades sueltas creados exitosamente');
     }
 
-    // Proceso para desglosar un empaque/caja/resma en stock suelto
     public function openPackage(Product $parentProduct)
     {
         if ($parentProduct->stock < 1) {
@@ -164,14 +159,10 @@ new class extends Component {
             return;
         }
 
-        // Buscar si existe un producto hijo asociado a este padre
         $childProduct = Product::where('parent_id', $parentProduct->id)->first();
 
         if ($childProduct) {
-            // Restar 1 unidad al empaque principal
             $parentProduct->decrement('stock', 1);
-
-            // Sumar la cantidad de unidades base contenidas al stock del hijo
             $childProduct->increment('stock', $parentProduct->items_per_unit);
 
             $this->success("Empaque abierto. Se agregaron {$parentProduct->items_per_unit} unidades sueltas al inventario.");

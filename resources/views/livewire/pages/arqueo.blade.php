@@ -16,9 +16,9 @@ new class extends Component {
 
     public array $nio = [
         '1000' => '', '500' => '', '200' => '', '100' => '',
-        '50' => '', '20' => '', '10' => '', '5' => '', '1' => ''
+        '50' => '', '20' => '', '10' => '', '5' => '', '1' => '',
+        '0_50' => '', '0_25' => ''
     ];
-
     public array $usd = [
         '100' => '', '50' => '', '20' => '', '10' => '', '5' => '', '1' => ''
     ];
@@ -69,9 +69,10 @@ new class extends Component {
             $this->error('No se encontró ninguna caja abierta para cerrar.');
         }
 
-        $this->nio = [
+       $this->nio = [
             '1000' => '', '500' => '', '200' => '', '100' => '',
-            '50' => '', '20' => '', '10' => '', '5' => '', '1' => ''
+            '50' => '', '20' => '', '10' => '', '5' => '', '1' => '',
+            '0_50' => '', '0_25' => ''
         ];
         $this->usd = [
             '100' => '', '50' => '', '20' => '', '10' => '', '5' => '', '1' => ''
@@ -82,11 +83,13 @@ new class extends Component {
         $this->total_expenses = 0.00;
     }
 
-    public function getTotalNioProperty(): float
+   public function getTotalNioProperty(): float
     {
         $total = 0;
         foreach ($this->nio as $value => $qty) {
-            $total += ((float)$value * (int)($qty ?: 0));
+            $valorMatematico = (float) str_replace('_', '.', $value);
+
+            $total += ($valorMatematico * (int)($qty ?: 0));
         }
         return $total;
     }
@@ -148,24 +151,25 @@ new class extends Component {
 
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
-        <x-card title="Córdobas (C$)" icon="o-banknotes" class="border-t-4 border-t-primary bg-base-200/50">
-            <div class="grid grid-cols-2 gap-4">
-                @foreach($nio as $denominacion => $cantidad)
+       <div class="grid grid-cols-2 gap-4">
+                @foreach($nio as $llave => $cantidad)
+                    @php
+                        // Calculamos el valor real
+                        $valorReal = (float) str_replace('_', '.', $llave);
+                        // Hacemos el texto más corto y limpio para que no aplaste la pantalla
+                        $textoEtiqueta = $valorReal < 1 ? ($valorReal * 100) . ' Centavos' : 'C$ ' . $valorReal;
+                    @endphp
+
                     <x-input
-                        label="{{ $denominacion >= 10 ? 'Billete' : 'Moneda' }} de {{ $denominacion }}"
-                        wire:model.live="nio.{{ $denominacion }}"
+                        label="{{ $textoEtiqueta }}"
+                        wire:model.live="nio.{{ $llave }}"
                         type="number"
                         min="0"
                         placeholder="0"
-                        icon="o-currency-dollar"
                         :disabled="!$isBoxOpen"
                     />
                 @endforeach
             </div>
-            <div class="mt-4 text-right text-lg font-bold text-primary">
-                Subtotal: C$ {{ number_format($total_nio, 2) }}
-            </div>
-        </x-card>
 
         <x-card title="Dólares (USD)" icon="o-currency-dollar" class="border-t-4 border-t-success bg-base-200/50">
             <div class="grid grid-cols-2 gap-4">
