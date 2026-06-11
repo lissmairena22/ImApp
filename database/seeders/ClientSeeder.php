@@ -3,13 +3,12 @@
 namespace Database\Seeders;
 
 use Illuminate\Database\Seeder;
+use App\Models\Client;
 
-class DatabaseSeeder extends Seeder
+class ClientSeeder extends Seeder
 {
     public function run(): void
     {
-        $this->call([
-            FullFakeDataSeeder::class,
-        ]);
+        Client::factory(2500)->create();
     }
 }

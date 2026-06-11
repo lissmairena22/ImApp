@@ -30,8 +30,8 @@ new class extends Component {
             'status' => 'Entregado'
         ]);
 
-        if ($order->factura) {
-            $order->factura->update([
+        if ($order->invoice) {
+            $order->invoice->update([
                 'status' => 'Entregada' // Cambia el estado de la factura a Entregada
             ]);
         }
@@ -52,8 +52,8 @@ new class extends Component {
             'status' => 'Cancelado'
         ]);
 
-        if ($order->factura) {
-            $order->factura->update([
+        if ($order->invoice) {
+            $order->invoice->update([
                 'status' => 'Anulada'
             ]);
         }
@@ -65,10 +65,10 @@ new class extends Component {
     {
         // Modificamos el whereIn para incluir 'Entregado' y 'Cancelado' y que no desaparezcan
         $orders = Order::query()
-            ->with(['cliente', 'usuario', 'factura'])
+            ->with(['client', 'user', 'invoice'])
             ->whereIn('status', ['Pendiente', 'EnProceso', 'Entregado', 'Cancelado'])
             ->when($this->search, function($q) {
-                $q->whereHas('cliente', function($query) {
+                $q->whereHas('client', function($query) {
                     $query->where('name', 'like', "%{$this->search}%");
                 })
                 ->orWhere('id', 'like', "%{$this->search}%");
@@ -120,19 +120,19 @@ new class extends Component {
 
             @scope('cell_cliente', $order)
                 <div>
-                    <div class="font-bold">{{ $order->cliente->name ?? 'Sin cliente' }}</div>
+                    <div class="font-bold">{{ $order->client->name ?? 'Sin cliente' }}</div>
                     <div class="text-xs text-gray-500">
-                        {{ $order->cliente->phone ?? 'Sin teléfono' }}
+                        {{ $order->client->phone ?? 'Sin teléfono' }}
                     </div>
                 </div>
             @endscope
 
             @scope('cell_factura', $order)
-                @if($order->factura)
+                @if($order->invoice)
                     <div>
-                        <div class="font-bold">{{ $order->factura->invoice_number }}</div>
+                        <div class="font-bold">{{ $order->invoice->invoice_number }}</div>
                         <div class="text-xs text-gray-500">
-                            {{ $order->factura->status }}
+                            {{ $order->invoice->status }}
                         </div>
                     </div>
                 @else
