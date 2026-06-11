@@ -54,7 +54,7 @@ new class extends Component {
         });
 
         $this->success('Egreso registrado correctamente y descontado de la caja.');
-        $this->reset(['concept', 'amount']);
+         $this->reset(['concept', 'amount']);
     }
 
     public function deleteExpense($id)
