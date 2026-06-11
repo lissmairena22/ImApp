@@ -61,7 +61,6 @@
                     <x-menu-item title="Nueva Venta" icon="o-shopping-cart" link="/ventas" />
                     <x-menu-item title="Devoluciones" icon="o-arrow-path-rounded-square" link="/devoluciones" />
                     <x-menu-item title="Clientes" icon="o-user-group" link="/clientes" />
-                    <x-menu-item title="Reporte de Ventas" icon="o-document-chart-bar" link="/reportes-ventas" />
                 </x-menu-sub>
 
                 <x-menu-sub title="Inventario" icon="o-archive-box">
@@ -69,6 +68,10 @@
                     <x-menu-item title="Compras/Insumos" icon="o-truck" link="/compras" />
                     <x-menu-item title="Salidas de Inventario" icon="o-archive-box-x-mark" link="/salidas-inventario" />
                     <x-menu-item title="Proveedores" icon="o-building-office-2" link="/proveedores" />
+                </x-menu-sub>
+
+                <x-menu-sub title="Reportes" icon="o-document-chart-bar">
+                    <x-menu-item title="Reportes" icon="o-folder-open" link="/reportes" />
                 </x-menu-sub>
 
                 <x-menu-separator />
