@@ -10,8 +10,8 @@ new class extends Component {
     use Toast, WithFileUploads;
 
     public $backupFile;
-    public bool $restoreModal = false;
 
+    public bool $restoreModal = false;
     public function mount()
     {
         $dir = storage_path('app/backups');
@@ -56,7 +56,6 @@ new class extends Component {
         $this->error('El archivo ya no existe en el servidor.');
     }
 
-    // NUEVO: Restaurar directamente seleccionando un ítem de la lista
     public function restoreFromList($filename)
     {
         $path = storage_path('app/backups/' . $filename);
@@ -87,7 +86,6 @@ new class extends Component {
         }
     }
 
-    // NUEVO: Eliminar respaldos viejos para no saturar el disco duro
     public function deleteBackup($filename)
     {
         $path = storage_path('app/backups/' . $filename);
@@ -97,7 +95,6 @@ new class extends Component {
         }
     }
 
-    // El archivo externo subido manualmente sigue funcionando aquí
     public function restoreDatabase()
     {
         $this->validate(['backupFile' => 'required|file']);
@@ -125,7 +122,6 @@ new class extends Component {
         }
     }
 
-    // MODIFICADO: Lee la carpeta local y lista los archivos dinámicamente
     public function with(): array
     {
         $backupDir = storage_path('app/backups');
@@ -136,7 +132,7 @@ new class extends Component {
             foreach ($files as $file) {
                 if ($file->getExtension() === 'sql') {
                     $backups[] = [
-                        'id' => $file->getFilename(), // MaryUI requiere un ID único
+                        'id' => $file->getFilename(),
                         'filename' => $file->getFilename(),
                         'size' => round($file->getSize() / 1024, 2) . ' KB',
                         'date' => date('Y-m-d H:i:s', $file->getMTime()),
@@ -144,7 +140,6 @@ new class extends Component {
                 }
             }
 
-            // Ordenar los archivos para que el más nuevo aparezca arriba
             usort($backups, function($a, $b) {
                 return strcmp($b['filename'], $a['filename']);
             });

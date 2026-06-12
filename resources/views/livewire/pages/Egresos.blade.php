@@ -2,7 +2,7 @@
 
 use Livewire\Volt\Component;
 use App\Models\CashRegister;
-use App\Models\Product; // Por si necesitas relacionar algo, pero usaremos el modelo de movimientos
+use App\Models\Product;
 use Mary\Traits\Toast;
 use Illuminate\Support\Facades\DB;
 
@@ -96,7 +96,6 @@ new class extends Component {
         $totalExpenses = 0;
 
         if ($activeRegister) {
-            // Leer solo los egresos de la caja actual
             $expenses = DB::table('cash_movements')
                 ->where('cash_register_id', $activeRegister->id)
                 ->where('type', 'Egreso')
