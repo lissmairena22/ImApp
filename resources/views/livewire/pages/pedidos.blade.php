@@ -16,7 +16,7 @@ new class extends Component {
         $this->resetPage();
     }
 
-    // Nueva función para marcar como Entregada
+    // Marks the order as delivered. The invoice keeps its payment status.
     public function deliverOrder($orderId)
     {
         $order = Order::findOrFail($orderId);
@@ -30,11 +30,6 @@ new class extends Component {
             'status' => 'Entregado'
         ]);
 
-        if ($order->invoice) {
-            $order->invoice->update([
-                'status' => 'Entregada' // Cambia el estado de la factura a Entregada
-            ]);
-        }
 
         $this->success('Orden marcada como entregada con éxito');
     }

@@ -1,7 +1,7 @@
 <?php
 
 use Livewire\Volt\Component;
-use App\Models\{Invoice, Devolution, DevolutionItem, Product, CashRegister};
+use App\Models\{Invoice, Devolution, DevolutionItem, CashRegister, InventoryOutput, InventoryOutputItem};
 use Illuminate\Support\Facades\DB;
 use Mary\Traits\Toast;
 
@@ -20,14 +20,17 @@ new class extends Component {
     public function updatedSearchInvoice($value): void
     {
         $term = trim($value);
+        $this->reset(['invoice', 'items', 'totalToReturn']);
+        $this->invoiceFactor = 1;
+        $this->canRestoreServiceMaterials = false;
 
         if (strlen($term) < 2) {
             $this->suggestions = [];
             return;
         }
 
-        $this->suggestions = Invoice::where('invoice_number', 'LIKE', "%{$term}%")
-            ->where('status', 'Pagada')
+        $this->suggestions = $this->eligibleInvoiceQuery()
+            ->where('invoice_number', 'LIKE', "%{$term}%")
             ->limit(5)
             ->get(['id', 'invoice_number', 'total']);
     }
@@ -53,7 +56,8 @@ new class extends Component {
         $this->invoiceFactor = 1;
         $this->canRestoreServiceMaterials = false;
 
-        $foundInvoice = Invoice::with([
+        $foundInvoice = $this->eligibleInvoiceQuery()
+            ->with([
                 'items.product.unit',
                 'items.materialConsumptions.material',
                 'items.devolutionItems',
@@ -64,7 +68,7 @@ new class extends Component {
             ->first();
 
         if (!$foundInvoice) {
-            $this->error('Factura no encontrada.', position: 'toast-top toast-center');
+            $this->error('Factura no encontrada o no apta para devolucion de productos.', position: 'toast-top toast-center');
             return;
         }
 
@@ -73,17 +77,27 @@ new class extends Component {
             return;
         }
 
-        if ($foundInvoice->order_id && $foundInvoice->order?->status === 'EnProceso') {
-            $this->error('No se puede reembolsar desde aquí: el pedido está en producción.', position: 'toast-top toast-center');
+        if ($foundInvoice->order_id && in_array($foundInvoice->order?->status, ['EnProceso', 'Cancelado'], true)) {
+            $this->error('No se puede reembolsar desde aqui: el pedido esta en proceso o cancelado.', position: 'toast-top toast-center');
+            return;
+        }
+
+        if ($foundInvoice->items->contains(fn($item) => !$this->invoiceItemCanBeReturned($item, $foundInvoice))) {
+            $this->error('Esta factura tiene conceptos que no son aptos para devolucion.', position: 'toast-top toast-center');
             return;
         }
 
         $this->invoice = $foundInvoice;
         $this->invoiceFactor = $this->invoiceFactorFor($foundInvoice);
-        $this->canRestoreServiceMaterials = $foundInvoice->order_id
-            && in_array($foundInvoice->order?->status, ['Pendiente', 'Parcial']);
+        $this->canRestoreServiceMaterials = false;
 
         foreach ($this->invoice->items as $item) {
+            if (!$this->invoiceItemCanBeReturned($item, $this->invoice)) {
+                continue;
+            }
+
+            $type = $item->product->type ?? 'Producto';
+
             $returnedQty = (float) $item->devolutionItems->sum('quantity');
             $remainingQty = max(0, (float) $item->quantity - $returnedQty);
 
@@ -91,7 +105,6 @@ new class extends Component {
                 continue;
             }
 
-            $type = $item->product->type ?? 'Servicio';
 
             // Evaluamos si el producto permite devoluciones (asume true si la columna no existe aún)
             $isReturnable = isset($item->product->is_returnable) ? (bool) $item->product->is_returnable : true;
@@ -108,19 +121,14 @@ new class extends Component {
                 'gross_unit_price' => round((float) $item->unit_price * $this->invoiceFactor, 2),
                 'type' => $type,
                 'unit' => $item->product->unit->name ?? 'Und',
-                'return_to_stock' => $type === 'Producto',
-                'restore_materials' => $type === 'Servicio' && $this->canRestoreServiceMaterials,
+                'return_to_stock' => false,
+                'restore_materials' => false,
                 'is_returnable' => $isReturnable,
-                'materials' => $item->materialConsumptions
-                    ->map(fn($material) => [
-                        'name' => $material->material_name,
-                        'unit' => $material->unit_name ?? 'Und',
-                        'total_consumed' => (float) $material->total_consumed,
-                    ])
-                    ->values()
-                    ->all(),
+                'materials' => [],
             ];
         }
+
+        $this->normalizeItems();
 
         if (empty($this->items)) {
             $this->invoice = null;
@@ -130,12 +138,19 @@ new class extends Component {
 
     public function updatedItems(): void
     {
+        $this->normalizeItems();
         $this->calculateTotal();
     }
 
     private function calculateTotal(): void
     {
         $this->totalToReturn = round(collect($this->items)->sum(function ($item) {
+            if (!is_array($item)) {
+                return 0;
+            }
+
+            $item = $this->normalizeItem($item);
+
             if (!$item['is_returnable']) {
                 return 0;
             }
@@ -152,6 +167,12 @@ new class extends Component {
 
     public function processDevolution(): void
     {
+        if (!$this->invoice) {
+            $this->error('Seleccione una factura apta para devolucion.', position: 'toast-top toast-center');
+            return;
+        }
+
+        $this->normalizeItems();
         $this->calculateTotal();
 
         if ($this->totalToReturn <= 0 || trim($this->reason) === '') {
@@ -164,14 +185,28 @@ new class extends Component {
         }
 
         $this->invoice->refresh();
+        $this->invoice->load(['order', 'items.product', 'items.devolutionItems']);
 
         if ($this->invoice->status !== 'Pagada') {
             $this->error('La factura ya no es apta para devolución.', position: 'toast-top toast-center');
             return;
         }
 
+        if ($this->invoice->order_id && in_array($this->invoice->order?->status, ['EnProceso', 'Cancelado'], true)) {
+            $this->error('La factura ya no es apta para devolucion por el estado del pedido.', position: 'toast-top toast-center');
+            return;
+        }
+
+        if ($this->invoice->items->contains(fn($item) => !$this->invoiceItemCanBeReturned($item, $this->invoice))) {
+            $this->error('La factura tiene conceptos que no son aptos para devolucion.', position: 'toast-top toast-center');
+            return;
+        }
+
         try {
             DB::transaction(function () {
+                $isFullReturn = $this->isFullReturn();
+                $returnedItems = [];
+
                 $devolution = Devolution::create([
                     'invoice_id' => $this->invoice->id,
                     'user_id' => auth()->id() ?? 1,
@@ -181,6 +216,12 @@ new class extends Component {
                 ]);
 
                 foreach ($this->items as $item) {
+                    if (!is_array($item)) {
+                        continue;
+                    }
+
+                    $item = $this->normalizeItem($item);
+
                     if (!$item['is_returnable']) {
                         continue;
                     }
@@ -191,8 +232,9 @@ new class extends Component {
                         continue;
                     }
 
-                    $returnedToStock = $this->restoreProductStock($item, $qty);
-                    $materialsRestored = $this->restoreServiceMaterials($item, $qty);
+                    $returnedItems[] = array_merge($item, ['qty_to_return' => $qty]);
+                    $returnedToStock = false;
+                    $materialsRestored = false;
 
                     DevolutionItem::create([
                         'devolution_id' => $devolution->id,
@@ -207,9 +249,10 @@ new class extends Component {
                     ]);
                 }
 
+                $this->registerInventoryOutput($returnedItems, $isFullReturn);
                 $this->registerCashOut();
 
-                if ($this->isFullReturn()) {
+                if ($isFullReturn) {
                     $this->invoice->update(['status' => 'Anulada']);
                     $this->invoice->order?->update(['status' => 'Cancelado']);
                 }
@@ -224,6 +267,57 @@ new class extends Component {
         }
     }
 
+    private function eligibleInvoiceQuery()
+    {
+        return Invoice::query()
+            ->where('status', 'Pagada')
+            ->whereHas('items.product', function ($query) {
+                $query->where('type', 'Producto')
+                    ->orWhere(function ($serviceQuery) {
+                        $serviceQuery->where('type', 'Servicio')
+                            ->where('estimated_production_time', '>', 0);
+                    });
+            })
+            ->whereDoesntHave('items', fn($query) => $query->whereDoesntHave('product'))
+            ->whereDoesntHave('items.product', function ($query) {
+                $query->whereNull('type')
+                    ->orWhere(function ($invalidQuery) {
+                        $invalidQuery->where('type', '!=', 'Producto')
+                            ->where(function ($serviceQuery) {
+                                $serviceQuery->where('type', '!=', 'Servicio')
+                                    ->orWhereNull('estimated_production_time')
+                                    ->orWhere('estimated_production_time', '<=', 0);
+                            });
+                    });
+            })
+            ->where(function ($query) {
+                $query->whereDoesntHave('items.product', fn($itemQuery) => $itemQuery->where('type', 'Servicio'))
+                    ->orWhereHas('order', fn($orderQuery) => $orderQuery->where('type', 'Produccion'));
+            })
+            ->where(function ($query) {
+                $query->whereDoesntHave('order')
+                    ->orWhereHas('order', fn($orderQuery) => $orderQuery->whereNotIn('status', ['EnProceso', 'Cancelado']));
+            });
+    }
+
+    private function invoiceItemCanBeReturned($item, Invoice $invoice): bool
+    {
+        $product = $item->product;
+
+        if (!$product) {
+            return false;
+        }
+
+        if ($product->type === 'Producto') {
+            return true;
+        }
+
+        return $product->type === 'Servicio'
+            && (float) $product->estimated_production_time > 0
+            && $invoice->order?->type === 'Produccion'
+            && !in_array($invoice->order?->status, ['EnProceso', 'Cancelado'], true);
+    }
+
     private function invoiceFactorFor(Invoice $invoice): float
     {
         $subtotal = max((float) $invoice->subtotal, 0.01);
@@ -233,6 +327,12 @@ new class extends Component {
     private function quantitiesAreValid(): bool
     {
         foreach ($this->items as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+
+            $item = $this->normalizeItem($item);
+
             if (!$item['is_returnable']) {
                 continue;
             }
@@ -248,45 +348,38 @@ new class extends Component {
         return true;
     }
 
-    private function restoreProductStock(array $item, float $qty): bool
+    private function registerInventoryOutput(array $returnedItems, bool $isFullReturn): void
     {
-        if ($item['type'] !== 'Producto' || empty($item['product_id']) || empty($item['return_to_stock'])) {
-            return false;
+        if (empty($returnedItems)) {
+            return;
         }
 
-        Product::where('id', $item['product_id'])->lockForUpdate()->increment('stock', $qty);
-        return true;
-    }
+        $orderId = null;
 
-    private function restoreServiceMaterials(array $item, float $qty): bool
-    {
-        if ($item['type'] !== 'Servicio' || empty($item['restore_materials'])) {
-            return false;
+        if ($isFullReturn && $this->invoice->order_id && !InventoryOutput::where('order_id', $this->invoice->order_id)->exists()) {
+            $orderId = $this->invoice->order_id;
         }
 
-        $invoiceItem = $this->invoice->items->firstWhere('id', $item['id']);
+        $output = InventoryOutput::create([
+            'order_id' => $orderId,
+            'user_id' => auth()->id() ?? 1,
+            'output_date' => now(),
+            'reason' => 'Devolucion sobre venta',
+            'notes' => 'Factura: ' . $this->invoice->invoice_number . '. Motivo: ' . $this->reason,
+        ]);
 
-        if (!$invoiceItem || (float) $invoiceItem->quantity <= 0) {
-            return false;
+        foreach ($returnedItems as $item) {
+            InventoryOutputItem::create([
+                'inventory_output_id' => $output->id,
+                'product_id' => $item['product_id'],
+                'description' => $item['description'],
+                'source_type' => $item['type'] === 'Servicio' ? 'Servicio devuelto' : 'Producto devuelto',
+                'quantity' => (float) $item['qty_to_return'],
+                'unit_name' => $item['unit'],
+                'material_lost' => 0,
+                'affects_stock' => false,
+            ]);
         }
-
-        $ratio = $qty / (float) $invoiceItem->quantity;
-        $restored = false;
-
-        foreach ($invoiceItem->materialConsumptions as $materialUse) {
-            if (!$materialUse->material_id) {
-                continue;
-            }
-
-            $restoreQty = round((float) $materialUse->total_consumed * $ratio, 2);
-
-            if ($restoreQty > 0) {
-                Product::where('id', $materialUse->material_id)->lockForUpdate()->increment('stock', $restoreQty);
-                $restored = true;
-            }
-        }
-
-        return $restored;
     }
 
     private function registerCashOut(): void
@@ -321,6 +414,12 @@ new class extends Component {
     private function isFullReturn(): bool
     {
         $remainingAfterReturn = collect($this->items)->sum(function ($item) {
+            if (!is_array($item)) {
+                return 0;
+            }
+
+            $item = $this->normalizeItem($item);
+
             // Si el item no es retornable, asumimos que siempre "quedará" en la factura
             if (!$item['is_returnable']) {
                 return (float) $item['max_qty'];
@@ -329,6 +428,39 @@ new class extends Component {
         });
 
         return $remainingAfterReturn <= 0;
+    }
+
+    private function normalizeItems(): void
+    {
+        foreach ($this->items as $key => $item) {
+            if (!is_array($item)) {
+                unset($this->items[$key]);
+                continue;
+            }
+
+            $this->items[$key] = $this->normalizeItem($item);
+        }
+    }
+
+    public function normalizeItem(array $item): array
+    {
+        return array_merge([
+            'id' => null,
+            'product_id' => null,
+            'description' => 'Item',
+            'max_qty' => 0,
+            'original_qty' => 0,
+            'already_returned' => 0,
+            'qty_to_return' => 0,
+            'unit_price' => 0,
+            'gross_unit_price' => 0,
+            'type' => 'Producto',
+            'unit' => 'Und',
+            'return_to_stock' => false,
+            'restore_materials' => false,
+            'is_returnable' => true,
+            'materials' => [],
+        ], $item);
     }
 }; ?>
 
@@ -401,6 +533,7 @@ new class extends Component {
                             </thead>
                             <tbody class="divide-y divide-gray-100">
                                 @foreach($items as $id => $item)
+                                    @php($item = $this->normalizeItem(is_array($item) ? $item : []))
                                     <tr class="hover:bg-gray-50/50 transition {{ !$item['is_returnable'] ? 'opacity-70 bg-gray-50' : '' }}">
                                         <td class="px-6 py-5">
                                             <p class="font-bold text-gray-800">{{ $item['description'] }}</p>
@@ -420,28 +553,8 @@ new class extends Component {
                                                 @endif
                                             </div>
 
-                                            @if($item['is_returnable'])
-                                                @if($item['type'] === 'Producto')
-                                                    <label class="mt-3 flex items-center gap-2 text-[11px] font-bold text-emerald-700 cursor-pointer">
-                                                        <input type="checkbox" wire:model.live="items.{{ $id }}.return_to_stock" class="rounded border-gray-300 text-emerald-600 focus:ring-emerald-500">
-                                                        Reintegrar al inventario
-                                                    </label>
-                                                @elseif(!empty($item['materials']))
-                                                    <div class="mt-3 space-y-1">
-                                                        @foreach($item['materials'] as $material)
-                                                            <div class="text-[10px] text-gray-500 bg-gray-50 border border-gray-100 rounded px-2 py-1">
-                                                                Material usado: <b>{{ $material['name'] }}</b>
-                                                                ({{ number_format($material['total_consumed'], 2) }} {{ $material['unit'] }})
-                                                            </div>
-                                                        @endforeach
-                                                    </div>
-                                                    <label class="mt-2 flex items-center gap-2 text-[11px] font-bold {{ $canRestoreServiceMaterials ? 'text-indigo-700 cursor-pointer' : 'text-gray-400' }}">
-                                                        <input type="checkbox" wire:model.live="items.{{ $id }}.restore_materials" @disabled(!$canRestoreServiceMaterials) class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
-                                                        Reintegrar materiales no producidos
-                                                    </label>
-                                                @endif
-                                            @else
-                                                <p class="text-[10px] text-gray-400 mt-2 italic">Este servicio es de consumo final y no admite reembolsos.</p>
+                                            @if(!$item['is_returnable'])
+                                                <p class="text-[10px] text-gray-400 mt-2 italic">Este concepto no admite reembolsos.</p>
                                             @endif
                                         </td>
                                         <td class="px-6 py-5 text-center font-medium text-gray-500">
@@ -476,10 +589,6 @@ new class extends Component {
                         <h3 class="font-black text-gray-800 uppercase text-sm mb-4 border-b pb-2">Finalizar Devolución</h3>
 
                         <div class="space-y-4">
-                            <div class="p-3 bg-indigo-50 rounded-xl border border-indigo-100 text-xs text-indigo-700 font-medium">
-                                El reembolso se calcula proporcionalmente con IVA/descuento de la factura. Los servicios terminados no reintegran materiales, porque ya fueron consumidos por la imprenta.
-                            </div>
-
                             <div>
                                 <label class="block text-[10px] font-bold text-gray-400 uppercase mb-1">Motivo</label>
                                 <textarea wire:model="reason" rows="3"

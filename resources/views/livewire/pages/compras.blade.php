@@ -2,6 +2,7 @@
 
 use Livewire\Volt\Component;
 use App\Models\{Provider, Product, Purchase, PurchaseItem, Category, Unit};
+use Illuminate\Support\Facades\DB;
 use Mary\Traits\Toast;
 
 new class extends Component {
@@ -12,7 +13,7 @@ new class extends Component {
     public ?int $proveedor_id = null, $producto_id = null, $editItemIndex = null;
     public bool $mostrar_proveedores = false, $mostrar_proveedores_ruc = false, $mostrar_proveedores_tel = false, $mostrar_productos = false;
 
-    public string $busqueda_producto = '', $codigo_producto = '', $unidad_medida = '', $cantidad = '', $precio_compra = '', $precio_venta = '';
+    public string $busqueda_producto = '', $codigo_producto = '', $unit_name = '', $cantidad = '', $precio_compra = '', $precio_venta = '';
     public array $items = [];
     public bool $modalEditarItem = false, $modalCancelar = false;
     public string $editCantidad = '', $editPrecioCompra = '';
@@ -75,7 +76,7 @@ new class extends Component {
     {
         $p = Product::where('is_active', true)->with('unit')->findOrFail($id);
         $this->producto_id = $p->id; $this->busqueda_producto = $p->name; $this->codigo_producto = (string) $p->id;
-        $this->unidad_medida = $p->unit->name ?? ''; $this->precio_compra = ''; $this->precio_venta = (string) $p->sale_price;
+        $this->unit_name = $p->unit->name ?? ''; $this->precio_compra = ''; $this->precio_venta = (string) $p->sale_price;
         $this->mostrar_productos = false;
     }
 
@@ -86,11 +87,11 @@ new class extends Component {
         if ((float)$this->precio_compra <= 0) { $this->addError('precio_compra', 'Obligatorio.'); return; }
         if ((float)$this->precio_compra > (float)$this->precio_venta) { $this->addError('precio_compra', 'No mayor a P. Venta.'); return; }
 
-        $this->items[] = ['producto_id' => $this->producto_id, 'producto' => $this->busqueda_producto, 'codigo' => $this->codigo_producto, 'unidad' => $this->unidad_medida, 'cantidad' => (float)$this->cantidad, 'precio_compra' => (float)$this->precio_compra, 'precio_venta' => (float)$this->precio_venta, 'subtotal' => (float)$this->cantidad * (float)$this->precio_compra];
+        $this->items[] = ['producto_id' => $this->producto_id, 'producto' => $this->busqueda_producto, 'codigo' => $this->codigo_producto, 'unit' => $this->unit_name, 'cantidad' => (float)$this->cantidad, 'precio_compra' => (float)$this->precio_compra, 'precio_venta' => (float)$this->precio_venta, 'subtotal' => (float)$this->cantidad * (float)$this->precio_compra];
         $this->guardarSesion(); $this->resetProducto();
     }
 
-    public function resetProducto(): void { $this->reset(['busqueda_producto', 'producto_id', 'codigo_producto', 'unidad_medida', 'cantidad', 'precio_compra', 'precio_venta', 'mostrar_productos']); $this->resetErrorBag(); }
+    public function resetProducto(): void { $this->reset(['busqueda_producto', 'producto_id', 'codigo_producto', 'unit_name', 'cantidad', 'precio_compra', 'precio_venta', 'mostrar_productos']); $this->resetErrorBag(); }
     public function eliminarItem(int $index): void { array_splice($this->items, $index, 1); $this->items = array_values($this->items); $this->guardarSesion(); }
 
     public function abrirEditarItem(int $index): void { $this->editItemIndex = $index; $this->editCantidad = (string) $this->items[$index]['cantidad']; $this->editPrecioCompra = (string) $this->items[$index]['precio_compra']; $this->modalEditarItem = true; }
@@ -98,6 +99,7 @@ new class extends Component {
     public function guardarEditarItem(): void
     {
         if ((float)$this->editCantidad <= 0) { $this->addError('editCantidad', 'Mayor a 0.'); return; }
+        if ((float)$this->editPrecioCompra <= 0) { $this->addError('editPrecioCompra', 'Mayor a 0.'); return; }
         if ((float)$this->editPrecioCompra > $this->items[$this->editItemIndex]['precio_venta']) { $this->addError('editPrecioCompra', 'No mayor a P. Venta.'); return; }
         $this->items[$this->editItemIndex]['cantidad'] = (float)$this->editCantidad; $this->items[$this->editItemIndex]['precio_compra'] = (float)$this->editPrecioCompra; $this->items[$this->editItemIndex]['subtotal'] = (float)$this->editCantidad * (float)$this->editPrecioCompra;
         $this->reset(['modalEditarItem', 'editItemIndex', 'editCantidad', 'editPrecioCompra']); $this->guardarSesion();
@@ -114,7 +116,7 @@ new class extends Component {
         return max(0.0, ($pC + ($pD * $tasa)) - $t);
     }
 
-    public function headers(): array { return [['key'=>'producto','label'=>'Producto'], ['key'=>'codigo','label'=>'Código'], ['key'=>'unidad','label'=>'Unidad'], ['key'=>'cantidad','label'=>'Cant.'], ['key'=>'precio_compra','label'=>'P. Compra'], ['key'=>'subtotal','label'=>'Subtotal'], ['key'=>'acciones','label'=>'Acciones','sortable'=>false]]; }
+    public function headers(): array { return [['key'=>'producto','label'=>'Producto'], ['key'=>'codigo','label'=>'Código'], ['key'=>'unit','label'=>'Unidad'], ['key'=>'cantidad','label'=>'Cant.'], ['key'=>'precio_compra','label'=>'P. Compra'], ['key'=>'subtotal','label'=>'Subtotal'], ['key'=>'acciones','label'=>'Acciones','sortable'=>false]]; }
     public function confirmarCancelar(): void { $this->modalCancelar = true; }
 
     public function cancelarCompra(): void
@@ -127,28 +129,54 @@ new class extends Component {
 
     public function registrarCompra(): void
     {
+        $this->validate([
+            'numero_factura' => 'required|string|max:255',
+            'fecha' => 'required|date',
+            'forma_pago' => 'required|in:contado,transferencia',
+            'metodo_pago' => 'required|in:cordobas,dolares,mixto',
+            'monto_cordobas' => 'nullable|numeric|min:0',
+            'monto_dolares' => 'nullable|numeric|min:0',
+            'tasa_cambio' => 'required|numeric|min:0.01',
+            'ref_transferencia' => $this->forma_pago === 'transferencia' ? 'required|string|max:255' : 'nullable|string|max:255',
+        ]);
+
         if (!$this->proveedor_id) { $this->addError('busqueda_proveedor', 'Selecciona un proveedor.'); return; }
         if (empty($this->items)) { $this->addError('busqueda_producto', 'Agrega un producto.'); return; }
-        if ($this->numero_factura === '') { $this->addError('numero_factura', 'Obligatorio.'); return; }
-        if ($this->forma_pago === 'transferencia' && $this->ref_transferencia === '') { $this->addError('ref_transferencia', 'Ingresa referencia.'); return; }
         if ($this->metodo_pago === 'mixto' && $this->monto_cordobas === '' && $this->monto_dolares === '') { $this->addError('monto_cordobas', 'Ingresa un monto.'); return; }
 
         $tasa = (float)($this->tasa_cambio ?: 36.50); $t = $this->total();
+        if ($t <= 0) { $this->addError('busqueda_producto', 'El total de la compra debe ser mayor a cero.'); return; }
+
+        foreach ($this->items as $index => $item) {
+            if (empty($item['producto_id']) || (float)$item['cantidad'] <= 0 || (float)$item['precio_compra'] <= 0 || (float)$item['subtotal'] <= 0) {
+                $this->addError('busqueda_producto', 'Revisa el producto #' . ($index + 1) . ': cantidad, precio y subtotal deben ser mayores a cero.');
+                return;
+            }
+        }
+
         $aC = $this->metodo_pago === 'cordobas' ? ($this->monto_cordobas !== '' ? (float)$this->monto_cordobas : $t) : ($this->metodo_pago === 'mixto' ? (float)$this->monto_cordobas : 0.0);
         $aD = $this->metodo_pago === 'dolares' ? ($this->monto_dolares !== '' ? (float)$this->monto_dolares : ($t / $tasa)) : ($this->metodo_pago === 'mixto' ? (float)$this->monto_dolares : 0.0);
+        $paid = $aC + ($aD * $tasa);
 
-        $purchase = Purchase::create(['provider_id' => $this->proveedor_id, 'user_id' => auth()->id(), 'purchase_date' => $this->fecha, 'provider_invoice_number' => $this->numero_factura, 'total' => $t, 'payment_method' => $this->forma_pago === 'transferencia' ? 'transferencia' : $this->metodo_pago, 'amount_cordobas' => $aC, 'amount_dolares' => $aD, 'exchange_rate' => $tasa]);
-
-        foreach ($this->items as $item) {
-            PurchaseItem::create(['purchase_id' => $purchase->id, 'product_id' => $item['producto_id'], 'quantity' => $item['cantidad'], 'cost_price' => $item['precio_compra'], 'subtotal' => $item['subtotal']]);
-            $prod = Product::findOrFail($item['producto_id']);
-            $prod->update(['stock' => $prod->stock + $item['cantidad'], 'cost_price' => $item['precio_compra'], 'sale_price' => $item['precio_venta']]);
+        if ($paid < $t) {
+            $this->addError('monto_cordobas', 'El pago no cubre el total de la compra.');
+            return;
         }
+
+        DB::transaction(function () use ($tasa, $t, $aC, $aD) {
+            $purchase = Purchase::create(['provider_id' => $this->proveedor_id, 'user_id' => auth()->id(), 'purchase_date' => $this->fecha, 'provider_invoice_number' => $this->numero_factura, 'total' => $t, 'payment_method' => $this->forma_pago === 'transferencia' ? 'transferencia' : $this->metodo_pago, 'amount_cordobas' => $aC, 'amount_dolares' => $aD, 'exchange_rate' => $tasa]);
+
+            foreach ($this->items as $item) {
+                PurchaseItem::create(['purchase_id' => $purchase->id, 'product_id' => $item['producto_id'], 'quantity' => $item['cantidad'], 'cost_price' => $item['precio_compra'], 'subtotal' => $item['subtotal']]);
+                $prod = Product::where('id', $item['producto_id'])->lockForUpdate()->firstOrFail();
+                $prod->update(['stock' => $prod->stock + $item['cantidad'], 'cost_price' => $item['precio_compra'], 'sale_price' => $item['precio_venta']]);
+            }
+        });
         $this->cancelarCompra(); $this->success('Compra registrada correctamente.', position: 'toast-bottom toast-end');
     }
 
-    public function categoriasOpciones(): array { return Category::where('is_active', true)->get()->map(fn($c) => ['id' => $c->id, 'name' => $c->name])->toArray(); }
-    public function unidadesOpciones(): array { return Unit::all()->map(fn($u) => ['id' => $u->id, 'name' => $u->name])->toArray(); }
+    public function categoryOptions(): array { return Category::where('is_active', true)->get()->map(fn($c) => ['id' => $c->id, 'name' => $c->name])->toArray(); }
+    public function unitOptions(): array { return Unit::all()->map(fn($u) => ['id' => $u->id, 'name' => $u->name])->toArray(); }
 
     public function guardarNuevoProveedor(): void
     {
@@ -160,8 +188,8 @@ new class extends Component {
 
     public function guardarNuevoProducto(): void
     {
-        $this->validate(['nprod_nombre' => 'required|string', 'nprod_categoria_id' => 'required', 'nprod_unit_id' => 'required', 'nprod_precio_venta' => 'required|numeric|min:0']);
-        $prod = Product::create(['name' => $this->nprod_nombre, 'category_id' => $this->nprod_categoria_id, 'unit_id' => $this->nprod_unit_id, 'type' => 'Producto', 'sale_price' => (float)$this->nprod_precio_venta, 'cost_price' => (float)($this->nprod_precio_compra ?: 0), 'stock' => (int)$this->nprod_stock, 'min_stock' => (int)$this->nprod_min_stock, 'is_active' => true]);
+        $this->validate(['nprod_nombre' => 'required|string|max:255', 'nprod_categoria_id' => 'required|exists:categories,id', 'nprod_unit_id' => 'required|exists:units,id', 'nprod_precio_venta' => 'required|numeric|min:0', 'nprod_precio_compra' => 'nullable|numeric|min:0', 'nprod_stock' => 'nullable|numeric|min:0', 'nprod_min_stock' => 'nullable|numeric|min:0']);
+        $prod = Product::create(['name' => $this->nprod_nombre, 'category_id' => $this->nprod_categoria_id, 'unit_id' => $this->nprod_unit_id, 'type' => 'Producto', 'sale_price' => (float)$this->nprod_precio_venta, 'cost_price' => (float)($this->nprod_precio_compra ?: 0), 'stock' => (float)($this->nprod_stock ?: 0), 'min_stock' => (float)($this->nprod_min_stock ?: 0), 'is_active' => true]);
         $this->seleccionarProducto($prod->id); $this->reset(['nprod_nombre', 'nprod_categoria_id', 'nprod_unit_id', 'nprod_precio_venta', 'nprod_precio_compra', 'modalNuevoProducto']); $this->nprod_stock = '0'; $this->nprod_min_stock = '5';
         $this->success('Producto creado.', position: 'toast-bottom toast-end');
     }
@@ -217,12 +245,12 @@ new class extends Component {
                         <div class="relative col-span-2"><x-input label="Producto" wire:model.live="busqueda_producto" icon="o-cube" class="input-xs" autocomplete="off" /> @error('busqueda_producto') <p class="text-error text-xs">{{ $message }}</p> @enderror
                             @if($mostrar_productos && count($this->sugerenciasProducto()) > 0)
                                 <div class="absolute z-50 w-full bg-base-100 border border-base-300 rounded-lg shadow-lg mt-1 max-h-40 overflow-y-auto">
-                                    @foreach($this->sugerenciasProducto() as $prod) <div wire:click="seleccionarProducto({{ $prod['id'] }})" class="px-3 py-1.5 hover:bg-base-200 cursor-pointer text-xs"><span class="font-semibold">{{ $prod['name'] }}</span> <span class="text-gray-400">{{ $prod['unidad']['name'] ?? '' }}</span></div> @endforeach
+                                    @foreach($this->sugerenciasProducto() as $prod) <div wire:click="seleccionarProducto({{ $prod['id'] }})" class="px-3 py-1.5 hover:bg-base-200 cursor-pointer text-xs"><span class="font-semibold">{{ $prod['name'] }}</span> <span class="text-gray-400">{{ $prod['unit']['name'] ?? '' }}</span></div> @endforeach
                                 </div>
                             @endif
                         </div>
                         <div><x-input label="Código" wire:model="codigo_producto" icon="o-qr-code" class="input-xs" readonly /></div>
-                        <div><x-input label="Unidad" wire:model="unidad_medida" icon="o-scale" class="input-xs" readonly /></div>
+                        <div><x-input label="Unidad" wire:model="unit_name" icon="o-scale" class="input-xs" readonly /></div>
                         <div><x-input label="Cantidad" wire:model="cantidad" type="number" min="1" icon="o-hashtag" class="input-xs" /> @error('cantidad') <p class="text-error text-xs">{{ $message }}</p> @enderror</div>
                         <div><x-input label="P. Compra (C$)" wire:model="precio_compra" type="number" step="0.01" prefix="C$" icon="o-arrow-down-circle" class="input-xs" /> @error('precio_compra') <p class="text-error text-xs">{{ $message }}</p> @enderror</div>
                         <div><x-input label="P. Venta (C$)" wire:model="precio_venta" type="number" step="0.01" prefix="C$" icon="o-arrow-up-circle" class="input-xs" /></div>
@@ -290,7 +318,7 @@ new class extends Component {
     </x-modal>
 
     <x-modal wire:model="modalNuevoProducto" title="Nuevo Producto" separator>
-        <div class="grid grid-cols-2 gap-4"><x-input label="Nombre" wire:model="nprod_nombre" icon="o-cube" class="col-span-2" /><x-select label="Categoría" wire:model="nprod_categoria_id" :options="$this->categoriasOpciones()" icon="o-tag" /><x-select label="Unidad" wire:model="nprod_unit_id" :options="$this->unidadesOpciones()" icon="o-scale" /><x-input label="P. Venta" wire:model="nprod_precio_venta" type="number" step="0.01" prefix="C$" /><x-input label="P. Compra" wire:model="nprod_precio_compra" type="number" step="0.01" prefix="C$" /><x-input label="Stock Inicial" wire:model="nprod_stock" type="number" /><x-input label="Stock Mínimo" wire:model="nprod_min_stock" type="number" /></div>
+        <div class="grid grid-cols-2 gap-4"><x-input label="Nombre" wire:model="nprod_nombre" icon="o-cube" class="col-span-2" /><x-select label="Categoría" wire:model="nprod_categoria_id" :options="$this->categoryOptions()" icon="o-tag" /><x-select label="Unidad" wire:model="nprod_unit_id" :options="$this->unitOptions()" icon="o-scale" /><x-input label="P. Venta" wire:model="nprod_precio_venta" type="number" step="0.01" prefix="C$" /><x-input label="P. Compra" wire:model="nprod_precio_compra" type="number" step="0.01" prefix="C$" /><x-input label="Stock Inicial" wire:model="nprod_stock" type="number" /><x-input label="Stock Mínimo" wire:model="nprod_min_stock" type="number" /></div>
         <x-slot:actions><x-button label="Cancelar" wire:click="$set('modalNuevoProducto', false)" /><x-button label="Guardar" class="btn-primary" wire:click="guardarNuevoProducto" /></x-slot:actions>
     </x-modal>
 </div>

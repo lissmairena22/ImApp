@@ -153,12 +153,12 @@ new class extends Component {
 
         // 2. Automatización: Crear sueltos si es un empaque con más de 1 unidad
         if ($this->new_type === 'Producto' && $this->new_items_per_unit > 1) {
-            $unidadSuela = Unit::firstOrCreate(['name' => 'Unidad']);
+            $looseUnit = Unit::firstOrCreate(['name' => 'Unidad']);
 
             Product::create([
                 'name'                      => $this->new_name . ' (Suelto/Unidad)',
                 'category_id'               => $this->new_category_id,
-                'unit_id'                   => $unidadSuela->id,
+                'unit_id'                   => $looseUnit->id,
                 'type'                      => 'Producto',
                 'sale_price'                => $this->new_price / $this->new_items_per_unit,
                 'cost_price'                => ($this->new_cost_price ?: 0) / $this->new_items_per_unit,

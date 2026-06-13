@@ -130,12 +130,12 @@ new class extends Component {
         );
 
         if (!$this->product_id && $this->type === 'Producto' && $this->items_per_unit > 1) {
-            $unidadSuela = Unit::firstOrCreate(['name' => 'Unidad']);
+            $looseUnit = Unit::firstOrCreate(['name' => 'Unidad']);
 
             Product::create([
                 'name' => $this->name . ' (Suelto/Unidad)',
                 'category_id' => $this->category_id,
-                'unit_id' => $unidadSuela->id,
+                'unit_id' => $looseUnit->id,
                 'type' => 'Producto',
                 'sale_price' => $this->sale_price / $this->items_per_unit,
                 'cost_price' => ($this->cost_price ?: 0) / $this->items_per_unit,
@@ -190,17 +190,17 @@ new class extends Component {
         $unitsQuery = Unit::query()->select(['id', 'name']);
 
         if ($this->category_id) {
-            $categoria = Category::find($this->category_id);
-            if ($categoria) {
-                $nombreCat = mb_strtolower($categoria->name, 'UTF-8');
+            $category = Category::find($this->category_id);
+            if ($category) {
+                $categoryName = mb_strtolower($category->name, 'UTF-8');
 
-                if (str_contains($nombreCat, 'papel') || str_contains($nombreCat, 'cartulina')) {
+                if (str_contains($categoryName, 'papel') || str_contains($categoryName, 'cartulina')) {
                     $unitsQuery->whereIn('name', ['Resma', 'Pliego', 'Paquete', 'Unidad', 'Caja']);
-                } elseif (str_contains($nombreCat, 'tarjeta') || str_contains($nombreCat, 'etiqueta') || str_contains($nombreCat, 'publicidad')) {
+                } elseif (str_contains($categoryName, 'tarjeta') || str_contains($categoryName, 'etiqueta') || str_contains($categoryName, 'publicidad')) {
                     $unitsQuery->whereIn('name', ['Millar', 'Paquete', 'Caja', 'Unidad', 'Docena']);
-                } elseif (str_contains($nombreCat, 'impresi') || str_contains($nombreCat, 'diseño') || str_contains($nombreCat, 'fotocopia') || str_contains($nombreCat, 'encuadernado') || str_contains($nombreCat, 'laminado') || str_contains($nombreCat, 'material')) {
+                } elseif (str_contains($categoryName, 'impresi') || str_contains($categoryName, 'diseño') || str_contains($categoryName, 'fotocopia') || str_contains($categoryName, 'encuadernado') || str_contains($categoryName, 'laminado') || str_contains($categoryName, 'material')) {
                     $unitsQuery->whereIn('name', ['Unidad', 'Docena']);
-                } elseif (str_contains($nombreCat, 'tinta')) {
+                } elseif (str_contains($categoryName, 'tinta')) {
                     $unitsQuery->whereIn('name', ['Litro', 'Unidad']);
                 } else {
                     $unitsQuery->whereIn('name', ['Unidad', 'Paquete']);
@@ -208,18 +208,18 @@ new class extends Component {
             }
         }
 
-        $unidades = $unitsQuery->get();
+        $units = $unitsQuery->get();
 
-        if ($this->unit_id && !$unidades->contains('id', $this->unit_id)) {
-            $unidadExtra = Unit::find($this->unit_id);
-            if ($unidadExtra) {
-                $unidades->push($unidadExtra);
+        if ($this->unit_id && !$units->contains('id', $this->unit_id)) {
+            $extraUnit = Unit::find($this->unit_id);
+            if ($extraUnit) {
+                $units->push($extraUnit);
             }
         }
 
         return [
             'categories' => Category::query()->select(['id', 'name'])->orderBy('name')->get(),
-            'units' => $unidades,
+            'units' => $units,
             'products' => Product::query()
                 ->select(['id', 'name', 'category_id', 'unit_id', 'type', 'sale_price', 'stock', 'min_stock', 'items_per_unit', 'is_active', 'is_sellable'])
                 ->when($this->search, fn($q) => $q->where('name', 'like', "%{$this->search}%"))
