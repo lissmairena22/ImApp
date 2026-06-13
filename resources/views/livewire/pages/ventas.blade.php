@@ -52,7 +52,9 @@ new class extends Component {
 
     public function with() {
         return [
-            'products' => Product::where('name', 'like', "%{$this->search}%")
+            'products' => Product::query()
+                ->select(['id', 'name', 'type', 'sale_price', 'stock', 'unit_id', 'estimated_production_time', 'is_sellable', 'is_active'])
+                ->where('name', 'like', "%{$this->search}%")
                 ->where('is_active', true)
                 ->where(function ($query) {
                     $query->where('type', 'Servicio')
@@ -62,16 +64,18 @@ new class extends Component {
                 ->limit(8)->get(),
 
             // Solo materiales (no sellables)
-            'availableMaterials' => Product::with('unit')
+            'availableMaterials' => Product::query()
+                ->select(['id', 'name', 'stock', 'unit_id', 'type', 'is_sellable', 'is_active'])
+                ->with('unit:id,name')
                 ->where('type', 'Producto')
                 ->where('is_sellable', false)
                 ->where('is_active', true)
                 ->orderBy('name')
                 ->get(),
 
-            'clients' => Client::where('is_active', true)->get(),
-            'categories' => Category::all(),
-            'units' => Unit::all(),
+            'clients' => Client::query()->select(['id', 'name'])->where('is_active', true)->orderBy('name')->get(),
+            'categories' => Category::query()->select(['id', 'name'])->orderBy('name')->get(),
+            'units' => Unit::query()->select(['id', 'name'])->orderBy('name')->get(),
         ];
     }
 

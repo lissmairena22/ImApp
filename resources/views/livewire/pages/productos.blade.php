@@ -187,7 +187,7 @@ new class extends Component {
 
     public function with(): array
     {
-        $unitsQuery = Unit::query();
+        $unitsQuery = Unit::query()->select(['id', 'name']);
 
         if ($this->category_id) {
             $categoria = Category::find($this->category_id);
@@ -218,11 +218,12 @@ new class extends Component {
         }
 
         return [
-            'categories' => Category::all(),
+            'categories' => Category::query()->select(['id', 'name'])->orderBy('name')->get(),
             'units' => $unidades,
             'products' => Product::query()
+                ->select(['id', 'name', 'category_id', 'unit_id', 'type', 'sale_price', 'stock', 'min_stock', 'items_per_unit', 'is_active', 'is_sellable'])
                 ->when($this->search, fn($q) => $q->where('name', 'like', "%{$this->search}%"))
-                ->with(['category', 'unit'])
+                ->with(['category:id,name', 'unit:id,name'])
                 ->orderBy('id', 'desc')
                 ->paginate(10),
             'totalProducts' => Product::count(),

@@ -93,6 +93,7 @@ new class extends Component {
     {
         return [
             'clients' => Client::query()
+            ->select(['id', 'name', 'dni', 'phone', 'email', 'address', 'is_active'])
             ->when($this->search, function($q) {
                 $q->where('name', 'like', "%{$this->search}%")
                   ->orWhere('dni', 'like', "%{$this->search}%");

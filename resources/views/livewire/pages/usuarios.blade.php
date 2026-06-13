@@ -80,6 +80,7 @@ new class extends Component {
     {
         return [
             'users' => User::query()
+                ->select(['id', 'name', 'username', 'role', 'status'])
                 ->when($this->search, fn($q) => $q->where('name', 'like', "%{$this->search}%"))
                 ->paginate(10),
             'headers' => [

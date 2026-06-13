@@ -53,7 +53,7 @@ new class extends Component {
                   ->orWhere('phone', 'like', "%{$b}%");
             })
             ->orderBy('company_name')
-            ->get();
+            ->paginate(10);
     }
 
    
@@ -157,7 +157,7 @@ new class extends Component {
    
     <div class="mb-4 max-w-md">
         <x-input
-            wire:model.live="busqueda"
+            wire:model.live.debounce.500ms="busqueda"
             placeholder="Buscar por nombre, RUC o teléfono..."
             icon="o-magnifying-glass"
             clearable
@@ -166,7 +166,7 @@ new class extends Component {
 
     
     <x-card shadow>
-        <x-table :headers="$this->headers()" :rows="$this->proveedores()" striped>
+        <x-table :headers="$this->headers()" :rows="$this->proveedores()" striped with-pagination>
 
             @scope('cell_is_active', $row)
                 @if($row->is_active)

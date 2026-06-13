@@ -54,7 +54,7 @@ new class extends Component {
         $this->canRestoreServiceMaterials = false;
 
         $foundInvoice = Invoice::with([
-                'items.product.unidad',
+                'items.product.unit',
                 'items.materialConsumptions.material',
                 'items.devolutionItems',
                 'client',
