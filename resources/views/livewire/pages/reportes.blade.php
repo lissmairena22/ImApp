@@ -627,7 +627,7 @@ new class extends Component
         return $this->cashExchangeRate > 0 ? $amount / $this->cashExchangeRate : 0;
     }
 
-    private function exportPdf(array $headers, Collection $rows, string $filename)
+   private function exportPdf(array $headers, Collection $rows, string $filename)
     {
         if ($rows->count() > 500) {
             $this->error('El PDF tiene demasiadas filas. Filtra por fechas o usa Excel para el historico completo.', position: 'toast-top toast-center');
@@ -636,7 +636,8 @@ new class extends Component
 
         ini_set('memory_limit', '1024M');
 
-        return Pdf::setOptions([
+        // 1. Guardamos el PDF generado en una variable en lugar de retornarlo de golpe
+        $pdf = Pdf::setOptions([
             'isRemoteEnabled' => false,
             'isHtml5ParserEnabled' => true,
             'isFontSubsettingEnabled' => true,
@@ -648,7 +649,12 @@ new class extends Component
             'generatedAt' => now()->format('d/m/Y H:i'),
             'headers' => $headers,
             'rows' => $rows,
-        ])->setPaper('a4', 'landscape')->download($filename . '.pdf');
+        ])->setPaper('a4', 'landscape');
+
+        // 2. Usamos el sistema nativo de Laravel para forzar a Livewire a descargar el archivo
+        return response()->streamDownload(function () use ($pdf) {
+            echo $pdf->output();
+        }, $filename . '.pdf');
     }
 
     private function exportExcel(array $headers, Collection $rows, string $filename)
