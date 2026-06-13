@@ -2,11 +2,37 @@
 
 use Livewire\Volt\Component;
 use Mary\Traits\Toast;
+use App\Services\ReportService;
+use App\Exports\GenericReportExport;
+use Barryvdh\DomPDF\Facade\Pdf;
+use Maatwebsite\Excel\Facades\Excel;
+use App\Models\Category;
 
 new class extends Component
 {
     use Toast;
 
+    // UI y Filtros Generales
+    public bool $previewModal = false;
+    public string $currentType = '';
+    public string $currentTitle = '';
+
+    // Filtros de Fecha (Arqueo y Egresos)
+    public string $startDate = '';
+    public string $endDate = '';
+
+    // Filtros de Productos
+    public $categories = [];
+    public string $filterCategory = '';
+    public string $filterStatus = '';
+    public string $filterStock = '';
+
+    // Datos de la tabla
+    public array $previewHeaders = [];
+    public array $previewData = [];
+    public array $previewTotals = [];
+
+    // Arreglo de reportes operativos
     public array $operationalReports = [
         [
             'title' => 'Reporte de Compra',
@@ -43,8 +69,16 @@ new class extends Component
             'color' => 'border-error',
             'type' => 'arqueo de caja',
         ],
+        [
+            'title' => 'Reporte de Egresos',
+            'description' => 'Historial de gastos, vales y salidas de dinero de caja.',
+            'icon' => 'o-arrow-trending-down',
+            'color' => 'border-error',
+            'type' => 'egresos',
+        ],
     ];
 
+    // Arreglo de reportes de registros
     public array $registryReports = [
         [
             'title' => 'Lista de Productos',
@@ -72,9 +106,104 @@ new class extends Component
         ],
     ];
 
-    public function generate(string $type): void
+    public function updated($property)
     {
-        $this->info('Preparando reporte de ' . ucfirst($type) . '.', position: 'toast-top toast-center');
+        $filtros = ['startDate', 'endDate', 'filterCategory', 'filterStatus', 'filterStock'];
+        if (in_array($property, $filtros)) {
+            $this->loadPreviewData();
+        }
+    }
+
+    public function openPreview(string $type, string $title): void
+    {
+        $this->currentType = $type;
+        $this->currentTitle = $title;
+
+        if ($type === 'productos') {
+            $this->filterCategory = '';
+            $this->filterStatus = '';
+            $this->filterStock = '';
+            $this->categories = Category::orderBy('name')->get();
+        } elseif (in_array($type, ['arqueo de caja', 'egresos'])) {
+            $this->startDate = now()->startOfMonth()->format('Y-m-d');
+            $this->endDate = now()->format('Y-m-d');
+        }
+
+        $this->loadPreviewData();
+        $this->previewModal = true;
+    }
+
+    public function loadPreviewData()
+    {
+        $reportService = app(ReportService::class);
+        $result = [];
+
+        switch ($this->currentType) {
+            case 'productos':
+                $result = $reportService->getProductsReport($this->filterCategory, $this->filterStatus, $this->filterStock);
+                break;
+            case 'arqueo de caja':
+                $result = $reportService->getCashRegistersReport($this->startDate, $this->endDate);
+                break;
+            case 'egresos':
+                $result = $reportService->getExpensesReport($this->startDate, $this->endDate);
+                break;
+            default:
+                $result = ['headers' => [], 'data' => [], 'totals' => []];
+                break;
+        }
+
+        $this->previewHeaders = array_map(function($header, $index) {
+            return ['key' => 'col_'.$index, 'label' => $header];
+        }, $result['headers'] ?? [], array_keys($result['headers'] ?? []));
+
+        $this->previewData = array_map(function($row) {
+            $formattedRow = [];
+            foreach ($row as $index => $value) {
+                $formattedRow['col_'.$index] = $value;
+            }
+            return $formattedRow;
+        }, $result['data'] ?? []);
+
+        $this->previewTotals = $result['totals'] ?? [];
+    }
+
+    public function export(string $format)
+    {
+        if (empty($this->previewHeaders) || empty($this->previewData)) {
+            $this->warning('No hay datos para exportar con los filtros actuales.');
+            return;
+        }
+
+        $simpleHeaders = array_column($this->previewHeaders, 'label');
+        $simpleData = array_map('array_values', $this->previewData);
+
+        $viewData = [
+            'title' => $this->currentTitle,
+            'headers' => $simpleHeaders,
+            'data' => $simpleData,
+            'totals' => $this->previewTotals,
+            'date' => date('d/m/Y h:i A')
+        ];
+
+        $filename = 'reporte_' . strtolower(str_replace(' ', '_', $this->currentType)) . '_' . date('Y_m_d_His');
+
+        if ($format === 'excel') {
+            return Excel::download(new GenericReportExport($viewData), "{$filename}.xlsx");
+        }
+
+        if ($format === 'pdf') {
+            $pdf = Pdf::loadView('reports.template', $viewData)->setPaper('a4', 'landscape');
+            return response()->streamDownload(fn () => print($pdf->output()), "{$filename}.pdf");
+        }
+
+        if ($format === 'word') {
+            $headers = [
+                "Content-type" => "application/vnd.ms-word",
+                "Content-Disposition" => "attachment;Filename={$filename}.doc"
+            ];
+            return response()->streamDownload(fn () => print(view('reports.template', $viewData)->render()), "{$filename}.doc", $headers);
+        }
     }
 };
 ?>
@@ -107,8 +236,8 @@ new class extends Component
                                 <x-button
                                     label="Generar Reporte"
                                     icon="o-document-arrow-down"
-                                    wire:click="generate('{{ $report['type'] }}')"
-                                    spinner="generate"
+                                    wire:click="openPreview('{{ $report['type'] }}', '{{ $report['title'] }}')"
+                                    spinner
                                     class="btn-primary w-full"
                                 />
                             </div>
@@ -165,8 +294,8 @@ new class extends Component
                         <x-button
                             label="Generar Reporte"
                             icon="o-document-arrow-down"
-                            wire:click="generate('{{ $report['route'] }}')"
-                            spinner="generate"
+                            wire:click="openPreview('{{ $report['route'] }}', '{{ $report['title'] }}')"
+                            spinner
                             class="btn-outline btn-secondary w-full"
                         />
                     </div>
@@ -174,4 +303,52 @@ new class extends Component
             @endforeach
         </div>
     </x-card>
+
+    <x-modal wire:model="previewModal" title="{{ $currentTitle }}" subtitle="Vista Previa de Impresión" separator class="backdrop-blur-sm" box-class="max-w-6xl">
+
+        @if(in_array($currentType, ['arqueo de caja', 'egresos']))
+            <div class="grid grid-cols-2 gap-4 mb-6 bg-base-200 p-4 rounded-lg">
+                <x-input label="Fecha de Inicio" type="date" wire:model.live="startDate" icon="o-calendar" />
+                <x-input label="Fecha de Fin" type="date" wire:model.live="endDate" icon="o-calendar" />
+            </div>
+        @endif
+
+        @if($currentType === 'productos')
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6 bg-base-200 p-4 rounded-lg">
+                <x-select label="Filtrar por Categoría" wire:model.live="filterCategory" :options="$categories" placeholder="Todas las categorías" option-value="id" option-label="name" icon="o-tag" />
+                <x-select label="Estado" wire:model.live="filterStatus" :options="[['id' => 'activos', 'name' => 'Solo Activos'], ['id' => 'inactivos', 'name' => 'Solo Inactivos']]" placeholder="Todos los estados" icon="o-check-circle" />
+                <x-select label="Nivel de Stock" wire:model.live="filterStock" :options="[['id' => 'bajo', 'name' => 'Stock Bajo (Crítico)'], ['id' => 'agotado', 'name' => 'Agotados (Stock 0)']]" placeholder="Cualquier cantidad" icon="o-cube" />
+            </div>
+        @endif
+
+        <div class="max-h-96 overflow-y-auto border border-base-300 rounded-lg bg-base-100">
+            @if(count($previewData) > 0)
+                <x-table :headers="$previewHeaders" :rows="$previewData" striped class="text-sm" />
+
+                @if(!empty($previewTotals))
+<div class="bg-base-200 p-4 font-bold grid gap-2 text-sm border-t border-base-300" style="grid-template-columns: repeat({{ count($previewTotals) }}, minmax(0, 1fr));">                        @foreach($previewTotals as $total)
+                            <div class="text-center">{{ $total }}</div>
+                        @endforeach
+                    </div>
+                @endif
+            @else
+                <div class="p-10 text-center text-gray-400">
+                    <x-icon name="o-inbox" class="w-12 h-12 mx-auto mb-3" />
+                    <p>No hay datos registrados con los filtros actuales.</p>
+                </div>
+            @endif
+        </div>
+
+        <x-slot:actions>
+            <div class="flex justify-between w-full">
+                <x-button label="Cerrar" @click="$wire.previewModal = false" class="btn-ghost" />
+
+                <div class="flex gap-2">
+                    <x-button label="Word" icon="o-document-text" wire:click="export('word')" class="btn-info text-white" :disabled="count($previewData) == 0" spinner="export" />
+                    <x-button label="Excel" icon="o-table-cells" wire:click="export('excel')" class="btn-success text-white" :disabled="count($previewData) == 0" spinner="export" />
+                    <x-button label="PDF" icon="o-document-arrow-down" wire:click="export('pdf')" class="btn-error text-white" :disabled="count($previewData) == 0" spinner="export" />
+                </div>
+            </div>
+        </x-slot:actions>
+    </x-modal>
 </div>
