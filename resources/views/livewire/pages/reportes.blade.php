@@ -1,6 +1,7 @@
 <?php
 
 use Livewire\Volt\Component;
+use Livewire\Attributes\Computed;
 use App\Models\CashRegister;
 use App\Models\Client;
 use App\Models\Devolution;
@@ -14,6 +15,7 @@ use App\Models\User;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Carbon\Carbon;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Maatwebsite\Excel\Concerns\FromArray;
 use Maatwebsite\Excel\Concerns\ShouldAutoSize;
 use Maatwebsite\Excel\Concerns\WithEvents;
@@ -36,6 +38,8 @@ new class extends Component
     public string $productReportMode = 'inventario';
     public bool $reportGenerated = false;
     public float $cashExchangeRate = 36.5;
+    public string $filterCategory = '';
+    public string $filterUsage = '';
 
     public array $operationalReports = [
         [
@@ -80,7 +84,15 @@ new class extends Component
             'color' => 'border-error',
             'type' => 'arqueo de caja',
         ],
+        [
+            'title' => 'Reporte de Egresos',
+            'description' => 'Historial de gastos, vales y salidas de dinero de caja.',
+            'icon' => 'o-arrow-trending-down',
+            'color' => 'border-error',
+            'type' => 'egresos',
+        ],
     ];
+
 
     public array $registryReports = [
         [
@@ -109,9 +121,25 @@ new class extends Component
         ],
     ];
 
+    public function products()
+    {
+        return Product::query()
+            ->with(['category', 'unit'])
+            ->when($this->search, fn($q) => $q->where('name', 'like', "%{$this->search}%"))
+            ->orderBy('name')
+            ->paginate(10);
+    }
+
+    #[Computed]
+    public function categories()
+    {
+        return Category::orderBy('name')->get();
+    }
+};
+
     public function generate(string $type): void
     {
-        if (in_array($type, ['compra', 'venta', 'pedidos', 'devoluciones', 'salidas de inventario', 'productos', 'clientes', 'usuarios', 'proveedores', 'arqueo de caja'])) {
+        if (in_array($type, ['compra', 'venta', 'pedidos', 'devoluciones', 'salidas de inventario', 'productos', 'clientes', 'usuarios', 'proveedores', 'arqueo de caja', 'egresos'])) {
             $this->activeReport = $type;
             $this->productReportMode = 'inventario';
             $this->reportGenerated = in_array($type, ['productos', 'clientes', 'usuarios', 'proveedores']);
@@ -156,7 +184,6 @@ new class extends Component
         }
 
         $rows = $this->reportRows();
-
         $headers = $this->reportHeaders();
         $filename = str($this->reportTitle())->lower()->replace(' ', '-')->toString() . '-' . now()->format('Ymd-His');
 
@@ -171,13 +198,12 @@ new class extends Component
     public function with(): array
     {
         return [
-            'reportRows' => $this->reportGenerated
-                ? $this->reportRows()
-                : collect(),
+            'reportRows' => $this->reportGenerated ? $this->reportRows() : collect(),
             'reportHeaders' => $this->reportHeaders(),
             'reportTitle' => $this->reportTitle(),
             'reportPeriod' => $this->reportPeriod(),
             'generatedAt' => now()->format('d/m/Y H:i'),
+            'categories' => \App\Models\Category::orderBy('name')->get(),
         ];
     }
 
@@ -194,6 +220,7 @@ new class extends Component
             'usuarios' => $this->userRows(),
             'proveedores' => $this->providerRows(),
             'arqueo de caja' => $this->cashRegisterRows(),
+            'egresos' => $this->expenseRows(),
             default => collect(),
         };
     }
@@ -211,6 +238,7 @@ new class extends Component
             'usuarios' => $this->userHeaders(),
             'proveedores' => $this->providerHeaders(),
             'arqueo de caja' => $this->cashRegisterHeaders(),
+            'egresos' => $this->expenseHeaders(),
             default => [],
         };
     }
@@ -225,6 +253,46 @@ new class extends Component
     {
         $this->productReportMode = 'agotarse';
         $this->reportGenerated = true;
+    }
+
+    private function expenseHeaders(): array
+    {
+        return ['Concepto / Descripción', 'Cantidad de transacciones', 'Monto Total'];
+    }
+
+    private function expenseRows(): Collection
+    {
+        $expenses = DB::table('cash_movements')
+            ->select(
+                'concept',
+                DB::raw('COUNT(id) as total_count'),
+                DB::raw('SUM(amount) as total_amount')
+            )
+            ->where('type', 'Egreso')
+            ->when($this->startDate, fn($query) => $query->whereDate('movement_date', '>=', $this->startDate))
+            ->when($this->endDate, fn($query) => $query->whereDate('movement_date', '<=', $this->endDate))
+            ->groupBy('concept')
+            ->orderByDesc('total_amount')
+            ->get();
+
+        $rows = collect();
+
+        foreach ($expenses as $e) {
+            $rows->push([
+                'Concepto / Descripción' => $e->concept,
+                'Cantidad de transacciones' => $e->total_count . ' transacciones',
+                'Monto Total' => 'C$ ' . number_format((float) $e->total_amount, 2),
+            ]);
+        }
+
+        return $this->appendTotalRow(
+            $rows,
+            $this->expenseHeaders(),
+            'Cantidad de transacciones',
+            'Monto Total',
+            'Total General de Egresos',
+            (float) $expenses->sum('total_amount')
+        );
     }
 
     private function purchaseRows(): Collection
@@ -391,13 +459,16 @@ new class extends Component
             });
     }
 
-    private function productRows(): Collection
+   private function productRows(): Collection
     {
         return Product::query()
             ->with(['category', 'unit'])
             ->where('is_active', true)
             ->where('type', 'Producto')
             ->when($this->productReportMode === 'agotarse', fn($query) => $query->whereColumn('stock', '<=', 'min_stock'))
+            ->when($this->filterCategory, fn($query) => $query->where('category_id', $this->filterCategory))
+            ->when($this->filterUsage === 'venta', fn($query) => $query->where('is_sellable', true))
+            ->when($this->filterUsage === 'insumo', fn($query) => $query->where('is_sellable', false))
             ->orderBy('name')
             ->get()
             ->map(function ($product, $index) {
@@ -510,6 +581,7 @@ new class extends Component
             'usuarios' => 'Reporte de Usuarios',
             'proveedores' => 'Reporte de Proveedores',
             'arqueo de caja' => 'Reporte de Arqueo de Caja',
+            'egresos' => 'Reporte Histórico de Egresos',
             default => 'Reporte de Ventas',
         };
     }
@@ -627,7 +699,7 @@ new class extends Component
         return $this->cashExchangeRate > 0 ? $amount / $this->cashExchangeRate : 0;
     }
 
-   private function exportPdf(array $headers, Collection $rows, string $filename)
+    private function exportPdf(array $headers, Collection $rows, string $filename)
     {
         if ($rows->count() > 500) {
             $this->error('El PDF tiene demasiadas filas. Filtra por fechas o usa Excel para el historico completo.', position: 'toast-top toast-center');
@@ -636,7 +708,6 @@ new class extends Component
 
         ini_set('memory_limit', '1024M');
 
-        // 1. Guardamos el PDF generado en una variable en lugar de retornarlo de golpe
         $pdf = Pdf::setOptions([
             'isRemoteEnabled' => false,
             'isHtml5ParserEnabled' => true,
@@ -651,7 +722,6 @@ new class extends Component
             'rows' => $rows,
         ])->setPaper('a4', 'landscape');
 
-        // 2. Usamos el sistema nativo de Laravel para forzar a Livewire a descargar el archivo
         return response()->streamDownload(function () use ($pdf) {
             echo $pdf->output();
         }, $filename . '.pdf');
@@ -827,18 +897,30 @@ new class extends Component
                     <div class="flex flex-col xl:flex-row xl:items-end xl:justify-between gap-4">
                         <div class="xl:w-[560px]">
                             @if($activeReport === 'productos')
-                                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                                    <x-button
-                                        label="Inventario actual"
-                                        icon="o-archive-box"
-                                        wire:click="showInventoryReport"
-                                        class="w-full {{ $productReportMode === 'inventario' ? 'btn-primary' : 'btn-outline' }}"
+                                <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                                    <x-select
+                                        label="Modo de Reporte"
+                                        wire:model.live="productReportMode"
+                                        :options="[['id'=>'inventario','name'=>'Inventario Completo'],['id'=>'agotarse','name'=>'Próximos a Agotarse']]"
+                                        icon="o-cube"
                                     />
-                                    <x-button
-                                        label="Proximos a agotarse"
-                                        icon="o-exclamation-triangle"
-                                        wire:click="showLowStockReport"
-                                        class="w-full {{ $productReportMode === 'agotarse' ? 'btn-warning' : 'btn-outline' }}"
+
+                                    <x-select
+                                        label="Filtrar por Categoría"
+                                        wire:model.live="filterCategory"
+                                        :options="$categories"
+                                        option-value="id"
+                                        option-label="name"
+                                        placeholder="Todas las categorías"
+                                        icon="o-tag"
+                                    />
+
+                                    <x-select
+                                        label="Tipo de Uso"
+                                        wire:model.live="filterUsage"
+                                        :options="[['id'=>'venta','name'=>'Productos para Venta'],['id'=>'insumo','name'=>'Insumos Internos']]"
+                                        placeholder="Todos"
+                                        icon="o-briefcase"
                                     />
                                 </div>
                             @else
@@ -865,11 +947,7 @@ new class extends Component
                         <div class="xl:col-span-3">
                             <x-input label="Fecha Fin:" wire:model="endDate" type="date" icon="o-calendar-days" />
                         </div>
-                        @if($activeReport === 'arqueo de caja')
-                            <div class="xl:col-span-2">
-                                <x-input label="Tasa C$/$" wire:model="cashExchangeRate" type="number" step="0.01" icon="o-arrows-right-left" />
-                            </div>
-                        @endif
+
                         <div class="{{ $activeReport === 'arqueo de caja' ? 'xl:col-span-1' : 'xl:col-span-2' }}">
                             <x-button label="Generar" icon="o-magnifying-glass" wire:click="buildReport" spinner="buildReport" class="btn-primary w-full" />
                         </div>
@@ -920,7 +998,7 @@ new class extends Component
                                 @forelse($reportRows as $row)
                                     <tr @class(['font-bold bg-primary/10' => !empty($row['_is_total'])])>
                                         @foreach($reportHeaders as $header)
-                                            <td>{{ $row[$header] }}</td>
+                                            <td>{{ $row[$header] ?? '' }}</td>
                                         @endforeach
                                     </tr>
                                 @empty
