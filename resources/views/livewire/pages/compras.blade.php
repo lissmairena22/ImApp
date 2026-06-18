@@ -3,7 +3,9 @@
 use Livewire\Volt\Component;
 use App\Models\{Provider, Product, Purchase, PurchaseItem, Category, Unit};
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Cache;
 use Mary\Traits\Toast;
+use Livewire\Attributes\Computed;
 
 new class extends Component {
     use Toast;
@@ -40,7 +42,6 @@ new class extends Component {
         session(['compra_en_curso' => collect(['numero_factura','fecha','proveedor_id','busqueda_proveedor','busqueda_ruc','busqueda_tel','items','forma_pago','metodo_pago','monto_cordobas','monto_dolares','tasa_cambio','ref_transferencia'])->mapWithKeys(fn($k) => [$k => $this->$k])->toArray()]);
     }
 
-    // Método mágico que reemplaza a todos los updatedX() anteriores
     public function updated($property): void
     {
         $sessionProps = ['numero_factura','fecha','forma_pago','metodo_pago','monto_cordobas','monto_dolares','tasa_cambio','ref_transferencia'];
@@ -52,8 +53,13 @@ new class extends Component {
         if ($property === 'busqueda_producto') { $this->mostrar_productos = true; $this->producto_id = null; }
     }
 
+    #[Computed]
     public function sugerenciasProveedor(): array { return strlen($this->busqueda_proveedor) < 1 ? [] : Provider::where('is_active', true)->where('company_name', 'like', "%{$this->busqueda_proveedor}%")->limit(6)->get()->toArray(); }
+
+    #[Computed]
     public function sugerenciasRuc(): array { return strlen($this->busqueda_ruc) < 1 ? [] : Provider::where('is_active', true)->where('ruc', 'like', "%{$this->busqueda_ruc}%")->limit(6)->get()->toArray(); }
+
+    #[Computed]
     public function sugerenciasTel(): array { return strlen($this->busqueda_tel) < 1 ? [] : Provider::where('is_active', true)->where('phone', 'like', "%{$this->busqueda_tel}%")->limit(6)->get()->toArray(); }
 
     public function seleccionarProveedor(int $id): void
@@ -64,11 +70,11 @@ new class extends Component {
         $this->guardarSesion();
     }
 
-    // Aquí se aplicó el filtro para ignorar los Servicios
+    #[Computed]
     public function sugerenciasProducto(): array
     {
         return strlen($this->busqueda_producto) < 1 ? [] : Product::where('is_active', true)
-            ->where('type', 'Producto') // <-- FILTRO APLICADO
+            ->where('type', 'Producto')
             ->where('name', 'like', "%{$this->busqueda_producto}%")->with('unit')->limit(6)->get()->toArray();
     }
 
@@ -116,7 +122,9 @@ new class extends Component {
         return max(0.0, ($pC + ($pD * $tasa)) - $t);
     }
 
+    #[Computed]
     public function headers(): array { return [['key'=>'producto','label'=>'Producto'], ['key'=>'codigo','label'=>'Código'], ['key'=>'unit','label'=>'Unidad'], ['key'=>'cantidad','label'=>'Cant.'], ['key'=>'precio_compra','label'=>'P. Compra'], ['key'=>'subtotal','label'=>'Subtotal'], ['key'=>'acciones','label'=>'Acciones','sortable'=>false]]; }
+
     public function confirmarCancelar(): void { $this->modalCancelar = true; }
 
     public function cancelarCompra(): void
@@ -175,8 +183,15 @@ new class extends Component {
         $this->cancelarCompra(); $this->success('Compra registrada correctamente.', position: 'toast-bottom toast-end');
     }
 
-    public function categoryOptions(): array { return Category::where('is_active', true)->get()->map(fn($c) => ['id' => $c->id, 'name' => $c->name])->toArray(); }
-    public function unitOptions(): array { return Unit::all()->map(fn($u) => ['id' => $u->id, 'name' => $u->name])->toArray(); }
+    #[Computed]
+    public function categoryOptions(): array {
+        return Cache::remember('categorias_activas', 86400, fn() => Category::where('is_active', true)->get()->map(fn($c) => ['id' => $c->id, 'name' => $c->name])->toArray());
+    }
+
+    #[Computed]
+    public function unitOptions(): array {
+        return Cache::remember('unidades_activas', 86400, fn() => Unit::all()->map(fn($u) => ['id' => $u->id, 'name' => $u->name])->toArray());
+    }
 
     public function guardarNuevoProveedor(): void
     {
@@ -215,23 +230,23 @@ new class extends Component {
                     <div class="flex items-center justify-between mb-2"><span class="font-semibold text-sm">Proveedor</span><x-button label="+ Nuevo" class="btn-xs btn-outline btn-primary" wire:click.prevent="$set('modalNuevoProveedor', true)" /></div>
                     <div class="grid grid-cols-3 gap-2">
                         <div class="relative"><x-input label="Nombre" wire:model.live="busqueda_proveedor" icon="o-building-office-2" class="input-xs" autocomplete="off" /> @error('busqueda_proveedor') <p class="text-error text-xs">{{ $message }}</p> @enderror
-                            @if($mostrar_proveedores && count($this->sugerenciasProveedor()) > 0)
+                            @if($mostrar_proveedores && count($this->sugerenciasProveedor) > 0)
                                 <div class="absolute z-50 w-full bg-base-100 border border-base-300 rounded-lg shadow-lg mt-1 max-h-40 overflow-y-auto">
-                                    @foreach($this->sugerenciasProveedor() as $prov) <div wire:click="seleccionarProveedor({{ $prov['id'] }})" class="px-3 py-1.5 hover:bg-base-200 cursor-pointer text-xs"><span class="font-semibold">{{ $prov['company_name'] }}</span> <span class="text-gray-400">{{ $prov['ruc'] }}</span></div> @endforeach
+                                    @foreach($this->sugerenciasProveedor as $prov) <div wire:click="seleccionarProveedor({{ $prov['id'] }})" class="px-3 py-1.5 hover:bg-base-200 cursor-pointer text-xs"><span class="font-semibold">{{ $prov['company_name'] }}</span> <span class="text-gray-400">{{ $prov['ruc'] }}</span></div> @endforeach
                                 </div>
                             @endif
                         </div>
                         <div class="relative"><x-input label="RUC" wire:model.live="busqueda_ruc" icon="o-identification" class="input-xs" autocomplete="off" />
-                            @if($mostrar_proveedores_ruc && count($this->sugerenciasRuc()) > 0)
+                            @if($mostrar_proveedores_ruc && count($this->sugerenciasRuc) > 0)
                                 <div class="absolute z-50 w-full bg-base-100 border border-base-300 rounded-lg shadow-lg mt-1 max-h-40 overflow-y-auto">
-                                    @foreach($this->sugerenciasRuc() as $prov) <div wire:click="seleccionarProveedor({{ $prov['id'] }})" class="px-3 py-1.5 hover:bg-base-200 cursor-pointer text-xs"><span class="font-semibold">{{ $prov['ruc'] }}</span> <span class="text-gray-400">{{ $prov['company_name'] }}</span></div> @endforeach
+                                    @foreach($this->sugerenciasRuc as $prov) <div wire:click="seleccionarProveedor({{ $prov['id'] }})" class="px-3 py-1.5 hover:bg-base-200 cursor-pointer text-xs"><span class="font-semibold">{{ $prov['ruc'] }}</span> <span class="text-gray-400">{{ $prov['company_name'] }}</span></div> @endforeach
                                 </div>
                             @endif
                         </div>
                         <div class="relative"><x-input label="Teléfono" wire:model.live="busqueda_tel" icon="o-phone" class="input-xs" autocomplete="off" />
-                            @if($mostrar_proveedores_tel && count($this->sugerenciasTel()) > 0)
+                            @if($mostrar_proveedores_tel && count($this->sugerenciasTel) > 0)
                                 <div class="absolute z-50 w-full bg-base-100 border border-base-300 rounded-lg shadow-lg mt-1 max-h-40 overflow-y-auto">
-                                    @foreach($this->sugerenciasTel() as $prov) <div wire:click="seleccionarProveedor({{ $prov['id'] }})" class="px-3 py-1.5 hover:bg-base-200 cursor-pointer text-xs"><span class="font-semibold">{{ $prov['phone'] }}</span> <span class="text-gray-400">{{ $prov['company_name'] }}</span></div> @endforeach
+                                    @foreach($this->sugerenciasTel as $prov) <div wire:click="seleccionarProveedor({{ $prov['id'] }})" class="px-3 py-1.5 hover:bg-base-200 cursor-pointer text-xs"><span class="font-semibold">{{ $prov['phone'] }}</span> <span class="text-gray-400">{{ $prov['company_name'] }}</span></div> @endforeach
                                 </div>
                             @endif
                         </div>
@@ -243,9 +258,9 @@ new class extends Component {
                     <div class="flex items-center justify-between mb-2"><span class="font-semibold text-sm">Agregar Producto</span><x-button label="+ Nuevo" class="btn-xs btn-outline btn-secondary" wire:click.prevent="$set('modalNuevoProducto', true)" /></div>
                     <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
                         <div class="relative col-span-2"><x-input label="Producto" wire:model.live="busqueda_producto" icon="o-cube" class="input-xs" autocomplete="off" /> @error('busqueda_producto') <p class="text-error text-xs">{{ $message }}</p> @enderror
-                            @if($mostrar_productos && count($this->sugerenciasProducto()) > 0)
+                            @if($mostrar_productos && count($this->sugerenciasProducto) > 0)
                                 <div class="absolute z-50 w-full bg-base-100 border border-base-300 rounded-lg shadow-lg mt-1 max-h-40 overflow-y-auto">
-                                    @foreach($this->sugerenciasProducto() as $prod) <div wire:click="seleccionarProducto({{ $prod['id'] }})" class="px-3 py-1.5 hover:bg-base-200 cursor-pointer text-xs"><span class="font-semibold">{{ $prod['name'] }}</span> <span class="text-gray-400">{{ $prod['unit']['name'] ?? '' }}</span></div> @endforeach
+                                    @foreach($this->sugerenciasProducto as $prod) <div wire:click="seleccionarProducto({{ $prod['id'] }})" class="px-3 py-1.5 hover:bg-base-200 cursor-pointer text-xs"><span class="font-semibold">{{ $prod['name'] }}</span> <span class="text-gray-400">{{ $prod['unit']['name'] ?? '' }}</span></div> @endforeach
                                 </div>
                             @endif
                         </div>
@@ -260,7 +275,7 @@ new class extends Component {
 
                 {{-- TABLA --}}
                 <x-card shadow class="p-3">
-                    <x-table :headers="$this->headers()" :rows="$this->items" striped>
+                    <x-table :headers="$this->headers" :rows="$this->items" striped>
                         @scope('cell_precio_compra', $row) C$ {{ number_format($row['precio_compra'], 2) }} @endscope
                         @scope('cell_subtotal', $row) C$ {{ number_format($row['subtotal'], 2) }} @endscope
                         @scope('cell_acciones', $row) <div class="flex gap-1"><x-button icon="o-pencil-square" class="btn-xs btn-warning btn-soft" tooltip="Editar" wire:click="abrirEditarItem({{ $loop->index }})" /><x-button icon="o-trash" class="btn-xs btn-error btn-soft" tooltip="Eliminar" wire:click="eliminarItem({{ $loop->index }})" /></div> @endscope
@@ -318,7 +333,7 @@ new class extends Component {
     </x-modal>
 
     <x-modal wire:model="modalNuevoProducto" title="Nuevo Producto" separator>
-        <div class="grid grid-cols-2 gap-4"><x-input label="Nombre" wire:model="nprod_nombre" icon="o-cube" class="col-span-2" /><x-select label="Categoría" wire:model="nprod_categoria_id" :options="$this->categoryOptions()" icon="o-tag" /><x-select label="Unidad" wire:model="nprod_unit_id" :options="$this->unitOptions()" icon="o-scale" /><x-input label="P. Venta" wire:model="nprod_precio_venta" type="number" step="0.01" prefix="C$" /><x-input label="P. Compra" wire:model="nprod_precio_compra" type="number" step="0.01" prefix="C$" /><x-input label="Stock Inicial" wire:model="nprod_stock" type="number" /><x-input label="Stock Mínimo" wire:model="nprod_min_stock" type="number" /></div>
+        <div class="grid grid-cols-2 gap-4"><x-input label="Nombre" wire:model="nprod_nombre" icon="o-cube" class="col-span-2" /><x-select label="Categoría" wire:model="nprod_categoria_id" :options="$this->categoryOptions" icon="o-tag" /><x-select label="Unidad" wire:model="nprod_unit_id" :options="$this->unitOptions" icon="o-scale" /><x-input label="P. Venta" wire:model="nprod_precio_venta" type="number" step="0.01" prefix="C$" /><x-input label="P. Compra" wire:model="nprod_precio_compra" type="number" step="0.01" prefix="C$" /><x-input label="Stock Inicial" wire:model="nprod_stock" type="number" /><x-input label="Stock Mínimo" wire:model="nprod_min_stock" type="number" /></div>
         <x-slot:actions><x-button label="Cancelar" wire:click="$set('modalNuevoProducto', false)" /><x-button label="Guardar" class="btn-primary" wire:click="guardarNuevoProducto" /></x-slot:actions>
     </x-modal>
 </div>

@@ -4,32 +4,33 @@ use Livewire\Volt\Component;
 use Livewire\WithPagination;
 use App\Models\Provider;
 use Mary\Traits\Toast;
+use Livewire\Attributes\Computed;
 
 new class extends Component {
     use Toast;
     use WithPagination;
 
-    
+
     public bool $modalAbrir  = false;
     public bool $modalEditar = false;
 
-   
+
     public string $nombre    = '';
     public string $ruc       = '';
     public string $direccion = '';
     public string $telefono  = '';
     public bool   $activo    = true;
 
-    
+
     public ?int   $editId        = null;
     public string $editDireccion = '';
     public string $editTelefono  = '';
     public bool   $editActivo    = true;
 
-   
+
     public string $busqueda = '';
 
-   
+    #[Computed]
     public function headers(): array
     {
         return [
@@ -42,7 +43,7 @@ new class extends Component {
         ];
     }
 
-    
+    #[Computed]
     public function proveedores()
     {
         return Provider::query()
@@ -53,10 +54,10 @@ new class extends Component {
                   ->orWhere('phone', 'like', "%{$b}%");
             })
             ->orderBy('company_name')
-            ->paginate(10);
+            ->Paginate(10);
     }
 
-   
+
     public function cancelarRegistro(): void
     {
         $this->reset(['nombre', 'ruc', 'direccion', 'telefono', 'activo']);
@@ -64,7 +65,7 @@ new class extends Component {
         $this->modalAbrir = false;
     }
 
-    
+
     public function registrar(): void
     {
         $this->validate([
@@ -97,7 +98,7 @@ new class extends Component {
         $this->success('Proveedor registrado correctamente.', position: 'toast-bottom toast-end');
     }
 
-   
+
     public function abrirEditar(int $id): void
     {
         $p = Provider::findOrFail($id);
@@ -108,7 +109,7 @@ new class extends Component {
         $this->modalEditar   = true;
     }
 
-   
+
     public function guardarEdicion(): void
     {
         $this->validate([
@@ -132,7 +133,7 @@ new class extends Component {
         $this->success('Proveedor actualizado correctamente.', position: 'toast-bottom toast-end');
     }
 
-   
+
     public function updatedBusqueda(): void
     {
         $this->resetPage();
@@ -142,7 +143,7 @@ new class extends Component {
 
 <div class="p-6">
 
-  
+
     <x-header title="Proveedores" separator>
         <x-slot:actions>
             <x-button
@@ -154,7 +155,7 @@ new class extends Component {
         </x-slot:actions>
     </x-header>
 
-   
+
     <div class="mb-4 max-w-md">
         <x-input
             wire:model.live.debounce.500ms="busqueda"
@@ -164,9 +165,9 @@ new class extends Component {
         />
     </div>
 
-    
+
     <x-card shadow>
-        <x-table :headers="$this->headers()" :rows="$this->proveedores()" striped with-pagination>
+      <x-table :headers="$this->headers" :rows="$this->proveedores" striped with-pagination>
 
             @scope('cell_is_active', $row)
                 @if($row->is_active)
@@ -188,7 +189,7 @@ new class extends Component {
         </x-table>
     </x-card>
 
-    
+
     <x-modal wire:model="modalAbrir" title="Registrar Proveedor" subtitle="Complete los datos del proveedor" separator>
 
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -236,7 +237,7 @@ new class extends Component {
 
     </x-modal>
 
-    
+
     <x-modal wire:model="modalEditar" title="Editar Proveedor" subtitle="Solo puede modificar dirección, teléfono y estado" separator>
 
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">

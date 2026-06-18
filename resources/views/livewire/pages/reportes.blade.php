@@ -135,11 +135,11 @@ new class extends Component
     {
         return Category::orderBy('name')->get();
     }
-};
 
     public function generate(string $type): void
     {
-        if (in_array($type, ['compra', 'venta', 'pedidos', 'devoluciones', 'salidas de inventario', 'productos', 'clientes', 'usuarios', 'proveedores', 'arqueo de caja', 'egresos'])) {
+        if (in_array($type, ['compra', 'venta', 'pedidos', 'devoluciones', 'salidas de inventario', 'productos', 'clientes', 'usuarios', 'proveedores', 'arqueo de caja', 'egresos']))
+        {
             $this->activeReport = $type;
             $this->productReportMode = 'inventario';
             $this->reportGenerated = in_array($type, ['productos', 'clientes', 'usuarios', 'proveedores']);
@@ -881,6 +881,7 @@ new class extends Component
         return response()->download($path, $filename . '.docx')->deleteFileAfterSend(true);
     }
 };
+
 ?>
 
 <div>
