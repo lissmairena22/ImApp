@@ -1,229 +1,383 @@
 <?php
 
 use Livewire\Volt\Component;
-use Livewire\WithPagination;
-use App\Models\{InventoryOutput, InventoryOutputItem, Order};
-use Illuminate\Support\Facades\DB;
+use Livewire\Attributes\Computed;
 use Mary\Traits\Toast;
+use Illuminate\Support\Facades\DB;
+use App\Models\Product;
+use App\Models\InventoryOutput;
+use Livewire\WithPagination;
 
 new class extends Component {
-    use WithPagination;
-    use Toast;
+    use Toast, WithPagination;
 
-    public string $search = '';
-    public string $reason = 'Pedido cancelado';
-    public string $notes = '';
+    public string $motivo = '';
+    public string $fecha = '';
+    public string $observaciones = '';
 
-    public function updatedSearch(): void
+    public string $busqueda_producto = '';
+    public ?int $producto_seleccionado_id = null;
+    public string $nombre_producto_seleccionado = '';
+    public int $stock_actual_seleccionado = 0;
+    public string $cantidad_salida = '';
+
+    public array $items = [];
+
+    public function mount()
     {
-        $this->resetPage();
+        $this->fecha = date('Y-m-d');
     }
 
-    public function registerOutput(int $orderId): void
+    #[Computed]
+    public function productosBuscados()
     {
-        $order = Order::with([
-                'client',
-                'items.product.unit',
-                'items.materialConsumptions.material',
-            ])
-            ->where('status', 'Cancelado')
-            ->findOrFail($orderId);
-
-        if (InventoryOutput::where('order_id', $order->id)->exists()) {
-            $this->error('Este pedido ya tiene una salida registrada.', position: 'toast-top toast-center');
-            return;
+        if (strlen($this->busqueda_producto) < 2) {
+            return [];
         }
 
-        try {
-            DB::transaction(function () use ($order) {
-                $output = InventoryOutput::create([
-                    'order_id' => $order->id,
-                    'user_id' => auth()->id() ?? 1,
-                    'output_date' => now(),
-                    'reason' => $this->reason ?: 'Pedido cancelado',
-                    'notes' => $this->notes,
-                ]);
+        return Product::query()
+            ->where('name', 'like', "%{$this->busqueda_producto}%")
+          //  ->orWhere('code', 'like', "%{$this->busqueda_producto}%")
+            ->take(5)
+            ->get();
+    }
 
-                foreach ($order->items as $item) {
-                    if (($item->product?->type ?? null) === 'Producto') {
-                        InventoryOutputItem::create([
-                            'inventory_output_id' => $output->id,
-                            'product_id' => $item->product_id,
-                            'description' => $item->description,
-                            'source_type' => 'Producto cancelado',
-                            'quantity' => $item->quantity,
-                            'unit_name' => $item->product->unit->name ?? 'Und',
-                            'material_lost' => 0,
-                            'affects_stock' => false,
-                        ]);
-                    }
-
-                    foreach ($item->materialConsumptions as $material) {
-                        InventoryOutputItem::create([
-                            'inventory_output_id' => $output->id,
-                            'product_id' => $material->material_id,
-                            'description' => $material->material_name,
-                            'source_type' => 'Material de servicio cancelado',
-                            'quantity' => $material->total_consumed,
-                            'unit_name' => $material->unit_name,
-                            'material_lost' => $material->material_lost,
-                            'affects_stock' => false,
-                        ]);
-                    }
-                }
-            });
-
-            $this->reset(['notes']);
-            $this->success('Salida de inventario registrada.', position: 'toast-top toast-center');
-        } catch (\Exception $e) {
-            $this->error('Error: ' . $e->getMessage(), position: 'toast-top toast-center');
+    public function seleccionarProducto($id)
+    {
+        $producto = Product::find($id);
+        if ($producto) {
+            $this->producto_seleccionado_id = $producto->id;
+            $this->nombre_producto_seleccionado = $producto->name;
+            $this->stock_actual_seleccionado = $producto->stock;
+            $this->busqueda_producto = '';
+            $this->cantidad_salida = '';
         }
+    }
+
+    #[Computed]
+    public function salidasHistoricas()
+    {
+        return InventoryOutput::query()
+            ->orderBy('output_date', 'desc')
+            ->orderBy('id', 'desc')
+            ->paginate(10);
     }
 
     public function with(): array
     {
-        $cancelledOrders = Order::query()
-            ->with([
-                'client',
-                'invoice',
-                'items.product.unit',
-                'items.materialConsumptions.material',
-            ])
-            ->where('status', 'Cancelado')
-            ->whereDoesntHave('inventoryOutput')
-            ->when($this->search, function ($query) {
-                $query->where('id', 'like', "%{$this->search}%")
-                    ->orWhereHas('client', fn($q) => $q->where('name', 'like', "%{$this->search}%"));
-            })
-            ->orderBy('id', 'desc')
-            ->paginate(8);
-
         return [
-            'cancelledOrders' => $cancelledOrders,
-            'recentOutputs' => InventoryOutput::with(['order.client', 'items'])->latest()->limit(8)->get(),
-            'pendingOutputs' => Order::where('status', 'Cancelado')->whereDoesntHave('inventoryOutput')->count(),
-            'registeredOutputs' => InventoryOutput::count(),
+            'headers' => [
+                ['key' => 'id', 'label' => 'CÓDIGO'],
+                ['key' => 'output_date', 'label' => 'FECHA'],
+                ['key' => 'reason', 'label' => 'MOTIVO'],
+                ['key' => 'notes', 'label' => 'OBSERVACIONES / JUSTIFICACIÓN'],
+            ]
         ];
+    }
+
+    public function agregarItem()
+    {
+        if (!$this->producto_seleccionado_id) {
+            $this->error('Por favor, busque y seleccione un producto primero.');
+            return;
+        }
+
+        if (!is_numeric($this->cantidad_salida) || $this->cantidad_salida <= 0) {
+            $this->error('La cantidad debe ser un número mayor a cero.');
+            return;
+        }
+
+        if ($this->cantidad_salida > $this->stock_actual_seleccionado) {
+            $this->error("No puedes retirar más de lo que hay en stock. Stock disponible: {$this->stock_actual_seleccionado}");
+            return;
+        }
+
+        foreach ($this->items as $item) {
+            if ($item['product_id'] == $this->producto_seleccionado_id) {
+                $this->error('Este producto ya está en la lista. Elimínelo si desea corregir la cantidad.');
+                return;
+            }
+        }
+
+        $this->items[] = [
+            'product_id' => $this->producto_seleccionado_id,
+            'nombre' => $this->nombre_producto_seleccionado,
+            'stock_actual' => $this->stock_actual_seleccionado,
+            'cantidad' => (int)$this->cantidad_salida
+        ];
+
+        $this->producto_seleccionado_id = null;
+        $this->nombre_producto_seleccionado = '';
+        $this->stock_actual_seleccionado = 0;
+        $this->cantidad_salida = '';
+    }
+
+    public function eliminarItem($index)
+    {
+        unset($this->items[$index]);
+        $this->items = array_values($this->items);
+        $this->success('Producto removido de la lista.');
+    }
+
+    public function guardarSalida()
+    {
+        $this->validate([
+            'motivo' => 'required',
+            'fecha' => 'required|date',
+            'observaciones' => 'required|min:10',
+        ], [
+            'motivo.required' => 'Debe seleccionar un motivo de salida.',
+            'fecha.required' => 'La fecha es obligatoria.',
+            'observaciones.required' => 'Debe justificar detalladamente la salida (mínimo 10 caracteres).',
+        ]);
+
+        if (empty($this->items)) {
+            $this->error('Debe agregar al menos un producto a la lista de salida.');
+            return;
+        }
+
+       try {
+            DB::transaction(function () {
+                $salidaId = DB::table('inventory_outputs')->insertGetId([
+                    'reason' => $this->motivo,
+                    'output_date' => $this->fecha,
+                    'notes' => $this->observaciones,
+                    'user_id' => auth()->id(),
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+
+                foreach ($this->items as $item) {
+                    DB::table('inventory_output_items')->insert([
+                        'inventory_output_id' => $salidaId,
+                        'product_id' => $item['product_id'],
+                        'description' => $item['nombre'],
+                        'source_type' => 'Inventario',
+                        'quantity' => $item['cantidad'],
+                        'material_lost' => 0,
+                        'affects_stock' => 1,
+                        'created_at' => now(),
+                        'updated_at' => now(),
+                    ]);
+
+                    DB::table('products')
+                        ->where('id', $item['product_id'])
+                        ->decrement('stock', $item['cantidad']);
+                }
+            });
+            $this->reset(['motivo', 'observaciones', 'items', 'busqueda_producto', 'producto_seleccionado_id']);
+            $this->fecha = date('Y-m-d');
+
+            $this->success('Salida de inventario procesada y stock actualizado correctamente.');
+
+        } catch (\Exception $e) {
+            $this->error('Ocurrió un error crítico al procesar la salida: ' . $e->getMessage());
+        }
     }
 }; ?>
 
-<div class="space-y-6">
-    <x-header title="Salidas de Inventario" subtitle="Bajas documentales por pedidos cancelados">
-        <x-slot:middle class="justify-end!">
-            <x-input icon="o-magnifying-glass"
-                     placeholder="Buscar pedido o cliente..."
-                     wire:model.live.debounce.500ms="search"
-                     clearable />
-        </x-slot:middle>
-    </x-header>
-
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <x-stat title="PENDIENTES DE SALIDA" value="{{ $pendingOutputs }}" icon="o-exclamation-triangle" color="text-warning" class="bg-warning/10" />
-        <x-stat title="SALIDAS REGISTRADAS" value="{{ $registeredOutputs }}" icon="o-archive-box-x-mark" color="text-error" class="bg-error/10" />
-    </div>
-
-    <div class="bg-white rounded-2xl border border-gray-200 shadow-sm p-5">
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <x-input label="Motivo general" wire:model="reason" icon="o-document-text" />
-            <x-input label="Notas" wire:model="notes" icon="o-pencil" placeholder="Ej: trabajo personalizado no reutilizable" />
+<div class="p-6 space-y-6 bg-base-200 min-h-screen">
+    <div class="flex justify-between items-center bg-white p-4 rounded-xl shadow-sm border">
+        <div>
+            <h1 class="text-2xl font-black text-gray-800 flex items-center gap-2">
+                <x-icon name="o-arrow-up-tray" class="w-7 h-7 text-error" />
+                Salidas de Inventario / Ajustes
+            </h1>
+            <p class="text-xs text-gray-500">Registra mermas, pérdidas o consumos internos y actualiza el stock al instante.</p>
         </div>
-        <p class="text-xs text-gray-500 mt-3">
-            Esta salida documenta material o producto asociado a pedidos cancelados. No descuenta stock otra vez, porque ventas ya registro el consumo al facturar. El material perdido se muestra como parte de la merma del servicio.
-        </p>
     </div>
 
-    <div class="space-y-4">
-        @forelse($cancelledOrders as $order)
-            <div class="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-                <div class="p-5 bg-gray-50 border-b flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-                    <div>
-                        <div class="flex items-center gap-2">
-                            <span class="font-black text-indigo-900">ORD-{{ str_pad($order->id, 3, '0', STR_PAD_LEFT) }}</span>
-                            <span class="px-2 py-0.5 rounded-full bg-red-100 text-red-700 text-[10px] font-black uppercase">Cancelado</span>
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+        <div class="lg:col-span-1 space-y-6">
+            <x-card title="Datos de la Salida" shadow separator class="bg-white">
+                <div class="space-y-4">
+                    <x-select
+                        label="Motivo del Despacho / Salida"
+                        wire:model="motivo"
+                        icon="o-exclamation-triangle"
+                        placeholder="Seleccione un motivo..."
+                        :options="[
+                            ['id' => 'Merma', 'name' => 'Merma / Desecho de Material'],
+                            ['id' => 'Uso Interno', 'name' => 'Uso Interno / Pruebas de Impresión'],
+                            ['id' => 'Ajuste', 'name' => 'Ajuste por Auditoría / Conteo'],
+                            ['id' => 'Robo o Pérdida', 'name' => 'Robo o Pérdida Confirmada']
+                        ]"
+                    />
+
+                    <x-input type="date"  label="Fecha del Movimiento"  wire:model="fecha" icon="o-calendar"  max="{{ date('Y-m-d') }}"
+/>
+
+                    <x-textarea
+                        label="Justificación u Observaciones"
+                        wire:model="observaciones"
+                        placeholder="Ej: Se dañaron 5 láminas en la guillotina..."
+                        rows="3"
+                        hint="Obligatorio para auditoría interna."
+                    />
+                </div>
+            </x-card>
+
+            <x-card title="Agregar Producto" shadow separator class="bg-white">
+                <div class="space-y-4 relative">
+                    <x-input
+                        label="Buscar por Nombre o Código"
+                        wire:model.live="busqueda_producto"
+                        placeholder="Escribe al menos 2 letras..."
+                        icon="o-magnifying-glass"
+                    />
+
+                    @if(!empty($this->productosBuscados))
+                        <div class="absolute z-50 w-full bg-white shadow-xl rounded-lg border border-gray-200 mt-1 max-h-56 overflow-y-auto">
+                            @foreach($this->productosBuscados as $prod)
+                                @if($prod)
+                                    <div wire:click="seleccionarProducto({{ $prod->id }})" class="p-3 hover:bg-red-50 cursor-pointer flex justify-between items-center border-b last:border-0 transition-all">
+                                        <div>
+                                            <span class="font-bold text-sm text-gray-800 block">{{ $prod?->name }}</span>
+                                            <span class="text-xs text-gray-400">Código: {{ $prod?->code ?? 'S/C' }}</span>
+                                        </div>
+                                        <span class="badge badge-error text-white font-semibold p-2">Stock: {{ $prod?->stock }}</span>
+                                    </div>
+                                @endif
+                            @endforeach
                         </div>
-                        <p class="text-sm text-gray-600 font-medium">{{ $order->client->name ?? 'Sin cliente' }}</p>
-                        <p class="text-[10px] text-gray-400 uppercase font-bold">
-                            {{ $order->invoice->invoice_number ?? 'Sin factura' }} · C$ {{ number_format($order->estimated_price, 2) }}
-                        </p>
+                    @endif
+
+                    @if($producto_seleccionado_id)
+                        <div class="p-3 bg-gray-50 rounded-lg border border-dashed border-gray-300 space-y-2">
+                            <p class="text-xs font-bold text-gray-500 uppercase tracking-wider">Seleccionado actualmente:</p>
+                            <p class="text-sm font-semibold text-gray-800">{{ $nombre_producto_seleccionado }}</p>
+                            <div class="flex justify-between items-center text-xs">
+                                <span class="text-gray-500">Stock Actual en Sistema:</span>
+                                <span class="font-bold text-error">{{ $stock_actual_seleccionado }} uds.</span>
+                            </div>
+
+                            <div class="pt-2">
+                                <x-input
+                                    type="number"
+                                    label="Cantidad a Retirar"
+                                    wire:model="cantidad_salida"
+                                    placeholder="Ej: 5"
+                                    icon="o-minus-circle"
+                                />
+                            </div>
+
+                            <div class="pt-2">
+                                <x-button
+                                    label="Agregar a la Lista"
+                                    wire:click="agregarItem"
+                                    icon="o-plus"
+                                    class="btn-error text-white w-full btn-sm"
+                                />
+                            </div>
+                        </div>
+                    @endif
+                </div>
+            </x-card>
+        </div>
+
+        <div class="lg:col-span-2">
+            <x-card shadow class="bg-white min-h-[400px]">
+                <div class="flex justify-between items-center mb-4 border-b pb-2">
+                    <div>
+                        <h3 class="text-lg font-bold text-gray-800">Detalle de Productos a Despachar</h3>
+                        <p class="text-xs text-gray-400">Verifique bien las cantidades antes de confirmar la salida.</p>
                     </div>
-                    <x-button label="Registrar salida"
-                              icon="o-archive-box-x-mark"
-                              wire:click="registerOutput({{ $order->id }})"
-                              wire:confirm="¿Registrar la salida documental de este pedido cancelado?"
-                              class="btn-error text-white"
-                              spinner />
+                    <span class="badge badge-neutral font-bold">{{ count($items) }} Items</span>
                 </div>
 
-                <div class="overflow-x-auto">
-                    <table class="w-full text-sm">
+                <div class="overflow-x-auto rounded-xl border border-gray-100">
+                    <table class="w-full text-left border-collapse bg-white">
                         <thead>
-                            <tr class="text-[10px] uppercase text-gray-400 font-black border-b">
-                                <th class="px-5 py-3 text-left">Concepto</th>
-                                <th class="px-5 py-3 text-left">Tipo</th>
-                                <th class="px-5 py-3 text-right">Cantidad</th>
-                                <th class="px-5 py-3 text-right">Merma</th>
+                            <tr class="bg-gray-100 text-gray-700 text-xs font-bold uppercase tracking-wider border-b">
+                                <th class="p-4">Producto</th>
+                                <th class="p-4 text-center">Stock Actual</th>
+                                <th class="p-4 text-center">Cantidad Salida</th>
+                                <th class="p-4 text-center">Nuevo Stock Simulado</th>
+                                <th class="p-4 text-center">Acciones</th>
                             </tr>
                         </thead>
-                        <tbody class="divide-y divide-gray-100">
-                            @foreach($order->items as $item)
-                                @if(($item->product?->type ?? null) === 'Producto')
-                                    <tr>
-                                        <td class="px-5 py-3 font-bold text-gray-700">{{ $item->description }}</td>
-                                        <td class="px-5 py-3">
-                                            <span class="px-2 py-0.5 rounded bg-emerald-100 text-emerald-700 text-[10px] font-bold">Producto cancelado</span>
-                                        </td>
-                                        <td class="px-5 py-3 text-right font-black">{{ number_format((float) $item->quantity, 2) }} {{ $item->product->unit->name ?? 'Und' }}</td>
-                                        <td class="px-5 py-3 text-right text-gray-400">0.00</td>
-                                    </tr>
-                                @endif
-
-                                @foreach($item->materialConsumptions as $material)
-                                    <tr>
-                                        <td class="px-5 py-3">
-                                            <p class="font-bold text-gray-700">{{ $material->material_name }}</p>
-                                            <p class="text-[10px] text-gray-400">Servicio: {{ $item->description }}</p>
-                                        </td>
-                                        <td class="px-5 py-3">
-                                            <span class="px-2 py-0.5 rounded bg-amber-100 text-amber-700 text-[10px] font-bold">Material consumido</span>
-                                        </td>
-                                        <td class="px-5 py-3 text-right font-black">{{ number_format((float) $material->total_consumed, 2) }} {{ $material->unit_name ?? 'Und' }}</td>
-                                        <td class="px-5 py-3 text-right font-bold text-red-500">{{ number_format((float) $material->material_lost, 2) }} {{ $material->unit_name ?? 'Und' }}</td>
-                                    </tr>
-                                @endforeach
-                            @endforeach
+                        <tbody class="divide-y divide-gray-100 text-sm">
+                            @forelse($items as $index => $item)
+                                <tr class="hover:bg-gray-50 transition-colors">
+                                    <td class="p-4 font-medium text-gray-900">{{ $item['nombre'] }}</td>
+                                    <td class="p-4 text-center text-gray-500 font-semibold">{{ $item['stock_actual'] }}</td>
+                                    <td class="p-4 text-center text-error font-bold text-base bg-red-50/50">
+                                        - {{ $item['cantidad'] }}
+                                    </td>
+                                    <td class="p-4 text-center font-bold text-success">
+                                        {{ $item['stock_actual'] - $item['cantidad'] }}
+                                    </td>
+                                    <td class="p-4 text-center">
+                                        <button
+                                            wire:click="eliminarItem({{ $index }})"
+                                            class="p-2 text-gray-400 hover:text-error rounded-lg hover:bg-red-50 transition-colors"
+                                            title="Eliminar de la lista"
+                                        >
+                                            <x-icon name="o-trash" class="w-5 h-5" />
+                                        </button>
+                                    </td>
+                                </tr>
+                            @empty
+                                <tr>
+                                    <td colspan="5" class="p-8 text-center text-gray-400">
+                                        <x-icon name="o-archive-box-x-mark" class="w-12 h-12 mx-auto text-gray-300 mb-2" />
+                                        No hay productos añadidos a la lista todavía. Use el buscador de la izquierda.
+                                    </td>
+                                </tr>
+                            @endforelse
                         </tbody>
                     </table>
                 </div>
-            </div>
-        @empty
-            <div class="bg-white rounded-2xl border border-dashed border-gray-300 p-10 text-center text-gray-400 font-bold">
-                No hay pedidos cancelados pendientes de salida.
-            </div>
-        @endforelse
-    </div>
 
-    {{ $cancelledOrders->links() }}
-
-    <div class="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-        <div class="p-5 bg-gray-50 border-b">
-            <h3 class="font-black text-gray-800 uppercase text-sm">Historial reciente</h3>
-            <p class="text-xs text-gray-500">Ultimas salidas documentales registradas.</p>
-        </div>
-        <div class="divide-y divide-gray-100">
-            @forelse($recentOutputs as $output)
-                <div class="p-5 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-                    <div>
-                        <p class="font-black text-gray-800">
-                            ORD-{{ str_pad($output->order_id, 3, '0', STR_PAD_LEFT) }}
-                            <span class="text-xs text-gray-400 font-bold">· {{ $output->order->client->name ?? 'Sin cliente' }}</span>
-                        </p>
-                        <p class="text-xs text-gray-500">{{ $output->reason }} · {{ $output->items->count() }} conceptos</p>
+                @if(!empty($items))
+                    <div class="mt-6 flex justify-end pt-4 border-t border-gray-100">
+                        <x-button
+                            label="Procesar Salida de Inventario"
+                            wire:click="guardarSalida"
+                            icon="o-check-circle"
+                            class="btn-error text-white btn-lg shadow-md font-black"
+                            wire:loading.attr="disabled"
+                        />
                     </div>
-                    <span class="text-xs font-bold text-gray-400">{{ $output->output_date }}</span>
-                </div>
-            @empty
-                <div class="p-6 text-center text-gray-400 font-bold">Todavia no hay salidas registradas.</div>
-            @endforelse
+                @endif
+            </x-card>
         </div>
+
+    </div>
+    <div class="mt-8">
+        <x-card title="Historial de Salidas Registradas" shadow separator class="bg-white">
+            <x-table :headers="$headers" :rows="$this->salidasHistoricas" with-pagination>
+
+                @scope('cell_id', $salida)
+                    <span class="font-bold text-gray-700">
+                        SAL-{{ str_pad($salida->id, 4, '0', STR_PAD_LEFT) }}
+                    </span>
+                @endscope
+
+                @scope('cell_output_date', $salida)
+                    <span class="text-sm font-medium text-gray-600">
+                        {{ date('d/m/Y', strtotime($salida->output_date)) }}
+                    </span>
+                @endscope
+
+                @scope('cell_reason', $salida)
+                    <span class="badge badge-ghost font-bold">{{ $salida->reason }}</span>
+                @endscope
+
+                @scope('cell_notes', $salida)
+                    <div class="max-w-md truncate text-sm text-gray-500" title="{{ $salida->notes }}">
+                        {{ $salida->notes ?? 'Sin observaciones' }}
+                    </div>
+                @endscope
+
+                <x-slot:empty>
+                    <div class="text-center p-8 text-gray-400">
+                        <x-icon name="o-archive-box-x-mark" class="w-12 h-12 inline mb-2 text-gray-300" />
+                        <p class="font-medium">No se han registrado salidas en el sistema.</p>
+                    </div>
+                </x-slot:empty>
+            </x-table>
+        </x-card>
     </div>
 </div>
