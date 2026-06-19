@@ -8,6 +8,10 @@ use Mary\Traits\Toast;
 new class extends Component {
     use Toast;
 
+    private const STANDARD_ADVANCE_RATE = 0.30;
+    private const HIGH_VALUE_ADVANCE_RATE = 0.50;
+    private const HIGH_VALUE_ADVANCE_THRESHOLD = 10000;
+
     public $search = '';
     public $cart = [];
 
@@ -25,6 +29,10 @@ new class extends Component {
     public $order_type = 'Rapido';
     public $delivery_date;
     public $hasProductionItems = false;
+    public bool $serviceNoteModal = false;
+    public string $serviceNoteIndex = '';
+    public string $serviceNoteTitle = '';
+    public string $serviceNoteText = '';
 
     // Propiedades del Modal de Nuevo Producto
     public $showProductModal = false;
@@ -188,17 +196,53 @@ new class extends Component {
         $this->refreshCartState();
     }
 
+    public function openServiceNote($index): void {
+        $index = (string) $index;
+
+        if ($this->order_type !== 'Produccion' || !isset($this->cart[$index]) || $this->cart[$index]['type'] !== 'Servicio') {
+            return;
+        }
+
+        $this->serviceNoteIndex = $index;
+        $this->serviceNoteTitle = $this->cart[$index]['name'] ?? 'Servicio';
+        $this->serviceNoteText = (string) ($this->cart[$index]['measurements'] ?? '');
+        $this->serviceNoteModal = true;
+    }
+
+    public function saveServiceNote(): void {
+        if ($this->serviceNoteIndex === '' || !isset($this->cart[$this->serviceNoteIndex])) {
+            $this->serviceNoteModal = false;
+            return;
+        }
+
+        if (strlen($this->serviceNoteText) > 255) {
+            $this->error('La nota no puede superar 255 caracteres.', position: 'toast-top toast-center');
+            return;
+        }
+
+        $this->cart[$this->serviceNoteIndex]['measurements'] = trim($this->serviceNoteText);
+        $this->serviceNoteModal = false;
+        $this->success('Nota guardada.', position: 'toast-top toast-center');
+    }
+
     public function checkProductionRequirements() {
         $items = collect($this->cart);
 
         $hasProduction = $items->contains('requires_production', true);
+        $previousOrderType = $this->order_type;
 
         $this->hasProductionItems = $hasProduction;
 
         if ($hasProduction) {
             $this->order_type = 'Produccion';
+            if ($previousOrderType !== 'Produccion') {
+                $this->received_amount = 0;
+            }
         } else {
             $this->order_type = 'Rapido';
+            if ($previousOrderType !== 'Rapido') {
+                $this->received_amount = 0;
+            }
         }
     }
 
@@ -215,6 +259,8 @@ new class extends Component {
             $this->received_amount = $this->total;
         }
 
+        $this->syncProductionAdvanceDefault();
+
         $this->calculateChange();
     }
 
@@ -230,7 +276,27 @@ new class extends Component {
     }
 
     public function updatedOrderType() {
+        if ($this->order_type === 'Produccion') {
+            $this->received_amount = 0;
+        }
+
         $this->calculateTotals();
+    }
+
+    public function minimumAdvanceAmount(): float {
+        if ($this->order_type !== 'Produccion' || (float) $this->total <= 0) {
+            return 0;
+        }
+
+        return round((float) $this->total * $this->advanceRate(), 2);
+    }
+
+    public function minimumAdvancePercent(): int {
+        return (int) round($this->advanceRate() * 100);
+    }
+
+    public function highValueAdvanceThreshold(): float {
+        return self::HIGH_VALUE_ADVANCE_THRESHOLD;
     }
 
     public function saveAll() {
@@ -246,6 +312,15 @@ new class extends Component {
         if ($this->order_type === 'Rapido' && $this->received_amount < $this->total) {
             $this->error('Pago insuficiente para factura rápida.', position: 'toast-top toast-center');
             return;
+        }
+
+        if ($this->order_type === 'Produccion' && $this->received_amount < $this->minimumAdvanceAmount()) {
+            $this->error('El abono minimo para esta orden es C$ ' . number_format($this->minimumAdvanceAmount(), 2) . '.', position: 'toast-top toast-center');
+            return;
+        }
+
+        if ($this->received_amount > $this->total) {
+            $this->received_amount = $this->total;
         }
 
         if (!$this->validateMaterialStock()) return;
@@ -332,6 +407,28 @@ new class extends Component {
         $this->calculateTotals();
     }
 
+    private function advanceRate(): float {
+        return (float) $this->total >= self::HIGH_VALUE_ADVANCE_THRESHOLD
+            ? self::HIGH_VALUE_ADVANCE_RATE
+            : self::STANDARD_ADVANCE_RATE;
+    }
+
+    private function syncProductionAdvanceDefault(): void {
+        if ($this->order_type !== 'Produccion') {
+            return;
+        }
+
+        $minimumAdvance = $this->minimumAdvanceAmount();
+
+        if ((float) $this->received_amount <= 0 || (float) $this->received_amount < $minimumAdvance) {
+            $this->received_amount = $minimumAdvance;
+        }
+
+        if ((float) $this->received_amount > (float) $this->total) {
+            $this->received_amount = $this->total;
+        }
+    }
+
     private function orderStatus(): string {
         return match ($this->order_type) {
             'Rapido'     => 'Entregado',
@@ -381,7 +478,7 @@ new class extends Component {
             'quantity'      => $item['quantity'],
             'unit_price'    => $item['price'],
             'subtotal'      => $item['price'] * $item['quantity'],
-            'measurements'  => $item['measurements'] ?? '',
+            'measurements'  => $this->order_type === 'Produccion' && $item['type'] === 'Servicio' ? trim((string) ($item['measurements'] ?? '')) : '',
             'material'      => $materialName,
             'material_lost' => $item['type'] === 'Servicio' ? (float) ($item['material_lost'] ?? 0) : 0,
         ];
@@ -533,6 +630,19 @@ new class extends Component {
                                 <td class="px-4 py-3">
                                     <div class="font-bold text-gray-800">{{ $item['name'] }}</div>
                                     <div class="text-[9px] text-gray-400">{{ $item['type'] }}</div>
+                                    @if($order_type === 'Produccion' && $item['type'] === 'Servicio')
+                                        <div class="mt-2 flex flex-wrap items-center gap-2">
+                                            <x-button label="Nota"
+                                                      icon="o-pencil-square"
+                                                      wire:click="openServiceNote('{{ $index }}')"
+                                                      class="btn-xs btn-outline btn-secondary" />
+                                            @if(!empty($item['measurements']))
+                                                <span class="text-[9px] font-bold uppercase text-purple-600 bg-purple-50 px-2 py-0.5 rounded">
+                                                    Guardada
+                                                </span>
+                                            @endif
+                                        </div>
+                                    @endif
                                 </td>
 
                                 <td class="px-4 py-3 text-center">
@@ -647,6 +757,13 @@ new class extends Component {
                     </div>
                 </div>
 
+                @php
+                    $recv = (float) $received_amount;
+                    $minimumAdvance = $order_type === 'Produccion' ? $this->minimumAdvanceAmount() : 0;
+                    $minimumAdvancePercent = $order_type === 'Produccion' ? $this->minimumAdvancePercent() : 0;
+                    $highValueAdvanceThreshold = $this->highValueAdvanceThreshold();
+                @endphp
+
                 <div class="bg-white border-2 border-dashed border-gray-200 rounded-xl p-4 space-y-4">
                     <div>
                         <label class="text-[10px] font-black text-indigo-600 uppercase mb-2 block">
@@ -654,8 +771,26 @@ new class extends Component {
                         </label>
                         <div class="relative">
                             <span class="absolute left-3 top-3 text-gray-400 font-bold">C$</span>
-                            <input type="number" wire:model.live="received_amount" class="w-full border-gray-200 rounded-lg pl-10 text-2xl font-black text-gray-800 focus:ring-indigo-500">
+                            <input type="number"
+                                   wire:model.live="received_amount"
+                                   min="{{ $order_type === 'Produccion' ? $minimumAdvance : 0 }}"
+                                   step="0.01"
+                                   class="w-full rounded-lg pl-10 text-2xl font-black text-gray-800 {{ $order_type === 'Produccion' && $recv < $minimumAdvance ? 'border-amber-300 focus:ring-amber-500 focus:border-amber-500' : 'border-gray-200 focus:ring-indigo-500' }}">
                         </div>
+
+                        @if($order_type === 'Produccion')
+                            <div class="mt-3 rounded-lg border border-purple-100 bg-purple-50 px-3 py-2 text-xs text-purple-800">
+                                <div class="flex justify-between gap-3 font-bold">
+                                    <span>Abono minimo requerido ({{ $minimumAdvancePercent }}%)</span>
+                                    <span>C$ {{ number_format($minimumAdvance, 2) }}</span>
+                                </div>
+                                @if((float) $total >= $highValueAdvanceThreshold)
+                                    <p class="mt-1 text-[10px] font-semibold uppercase">Aplica 50% por factura desde C$ {{ number_format($highValueAdvanceThreshold, 2) }}.</p>
+                                @else
+                                    <p class="mt-1 text-[10px] font-semibold uppercase">Aplica 30% para ordenes menores a C$ {{ number_format($highValueAdvanceThreshold, 2) }}.</p>
+                                @endif
+                            </div>
+                        @endif
                     </div>
 
                     @if($order_type === 'Rapido')
@@ -686,6 +821,7 @@ new class extends Component {
                     $isDisabled = match(true) {
                         $hasStockIssues => true,
                         $order_type === 'Rapido' => $recv < (float) $total,
+                        $order_type === 'Produccion' => $recv < $minimumAdvance,
                         default => false,
                     };
 
@@ -705,6 +841,23 @@ new class extends Component {
             </div>
         </div>
     </div>
+
+    <x-modal wire:model="serviceNoteModal" title="Nota de taller" subtitle="{{ $serviceNoteTitle }}" separator box-class="max-w-lg">
+        <div class="space-y-2">
+            <label class="text-[10px] font-black text-gray-400 uppercase">Indicaciones del servicio</label>
+            <textarea wire:model="serviceNoteText"
+                      maxlength="255"
+                      rows="5"
+                      class="w-full border-gray-200 rounded-xl text-sm focus:ring-purple-500 focus:border-purple-500"
+                      placeholder="Medidas, acabados, referencia, observaciones del cliente..."></textarea>
+            <p class="text-right text-[10px] text-gray-400">{{ strlen($serviceNoteText) }}/255</p>
+        </div>
+
+        <x-slot:actions>
+            <x-button label="Cancelar" @click="$wire.serviceNoteModal = false" class="btn-ghost" />
+            <x-button label="Guardar nota" icon="o-check" class="btn-primary" wire:click="saveServiceNote" />
+        </x-slot:actions>
+    </x-modal>
 
     <x-modal wire:model="showProductModal" title="Registro Rápido de Producto o Servicio" separator class="backdrop-blur">
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">

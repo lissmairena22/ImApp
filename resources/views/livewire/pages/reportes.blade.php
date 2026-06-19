@@ -17,7 +17,7 @@ new class extends Component
     public string $currentType = '';
     public string $currentTitle = '';
 
-    // Filtros de Fecha (Arqueo y Egresos)
+    // Filtros de Fecha (Reportes Operativos)
     public string $startDate = '';
     public string $endDate = '';
 
@@ -120,13 +120,15 @@ new class extends Component
         $this->currentTitle = $title;
 
         if ($type === 'productos') {
+            $this->startDate = '';
+            $this->endDate = '';
             $this->filterCategory = '';
             $this->filterStatus = '';
             $this->filterStock = '';
             $this->categories = Category::orderBy('name')->get();
-        } elseif (in_array($type, ['arqueo de caja', 'egresos'])) {
-            $this->startDate = now()->startOfMonth()->format('Y-m-d');
-            $this->endDate = now()->format('Y-m-d');
+        } else {
+            $this->startDate = '';
+            $this->endDate = '';
         }
 
         $this->loadPreviewData();
@@ -142,8 +144,29 @@ new class extends Component
             case 'productos':
                 $result = $reportService->getProductsReport($this->filterCategory, $this->filterStatus, $this->filterStock);
                 break;
+            case 'clientes':
+                $result = $reportService->getClientsReport();
+                break;
+            case 'usuarios':
+                $result = $reportService->getUsersReport();
+                break;
+            case 'proveedores':
+                $result = $reportService->getProvidersReport();
+                break;
+            case 'compra':
+                $result = $reportService->getPurchasesReport($this->startDate, $this->endDate);
+                break;
+            case 'venta':
+                $result = $reportService->getSalesReport($this->startDate, $this->endDate);
+                break;
+            case 'pedidos':
+                $result = $reportService->getOrdersReport($this->startDate, $this->endDate);
+                break;
+            case 'devoluciones':
+                $result = $reportService->getDevolutionsReport($this->startDate, $this->endDate);
+                break;
             case 'arqueo de caja':
-                $result = $reportService->getCashRegistersReport($this->startDate, $this->endDate);
+                $result = $reportService->getCashRegistersFormattedReport($this->startDate, $this->endDate);
                 break;
             case 'egresos':
                 $result = $reportService->getExpensesReport($this->startDate, $this->endDate);
@@ -306,7 +329,7 @@ new class extends Component
 
     <x-modal wire:model="previewModal" title="{{ $currentTitle }}" subtitle="Vista Previa de Impresión" separator class="backdrop-blur-sm" box-class="max-w-6xl">
 
-        @if(in_array($currentType, ['arqueo de caja', 'egresos']))
+        @if(in_array($currentType, ['compra', 'venta', 'pedidos', 'devoluciones', 'arqueo de caja', 'egresos']))
             <div class="grid grid-cols-2 gap-4 mb-6 bg-base-200 p-4 rounded-lg">
                 <x-input label="Fecha de Inicio" type="date" wire:model.live="startDate" icon="o-calendar" />
                 <x-input label="Fecha de Fin" type="date" wire:model.live="endDate" icon="o-calendar" />

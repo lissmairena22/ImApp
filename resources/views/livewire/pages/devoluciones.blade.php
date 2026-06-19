@@ -272,23 +272,12 @@ new class extends Component {
         return Invoice::query()
             ->where('status', 'Pagada')
             ->whereHas('items.product', function ($query) {
-                $query->where('type', 'Producto')
-                    ->orWhere(function ($serviceQuery) {
-                        $serviceQuery->where('type', 'Servicio')
-                            ->where('estimated_production_time', '>', 0);
-                    });
+                $query->whereIn('type', ['Producto', 'Servicio']);
             })
             ->whereDoesntHave('items', fn($query) => $query->whereDoesntHave('product'))
             ->whereDoesntHave('items.product', function ($query) {
                 $query->whereNull('type')
-                    ->orWhere(function ($invalidQuery) {
-                        $invalidQuery->where('type', '!=', 'Producto')
-                            ->where(function ($serviceQuery) {
-                                $serviceQuery->where('type', '!=', 'Servicio')
-                                    ->orWhereNull('estimated_production_time')
-                                    ->orWhere('estimated_production_time', '<=', 0);
-                            });
-                    });
+                    ->orWhereNotIn('type', ['Producto', 'Servicio']);
             })
             ->where(function ($query) {
                 $query->whereDoesntHave('items.product', fn($itemQuery) => $itemQuery->where('type', 'Servicio'))
@@ -313,7 +302,6 @@ new class extends Component {
         }
 
         return $product->type === 'Servicio'
-            && (float) $product->estimated_production_time > 0
             && $invoice->order?->type === 'Produccion'
             && !in_array($invoice->order?->status, ['EnProceso', 'Cancelado'], true);
     }
