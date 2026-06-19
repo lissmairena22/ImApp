@@ -1,42 +1,38 @@
 <?php
 
 use Livewire\Volt\Component;
-use App\Models\CashRegister;
-use App\Models\Client;
-use App\Models\Devolution;
-use App\Models\Invoice;
-use App\Models\InventoryOutput;
-use App\Models\Order;
-use App\Models\Product;
-use App\Models\Provider;
-use App\Models\Purchase;
-use App\Models\User;
-use Barryvdh\DomPDF\Facade\Pdf;
-use Carbon\Carbon;
-use Illuminate\Support\Collection;
-use Maatwebsite\Excel\Concerns\FromArray;
-use Maatwebsite\Excel\Concerns\ShouldAutoSize;
-use Maatwebsite\Excel\Concerns\WithEvents;
-use Maatwebsite\Excel\Events\AfterSheet;
-use Maatwebsite\Excel\Facades\Excel;
 use Mary\Traits\Toast;
-use PhpOffice\PhpWord\IOFactory;
-use PhpOffice\PhpWord\PhpWord;
-use PhpOffice\PhpSpreadsheet\Style\Alignment;
-use PhpOffice\PhpSpreadsheet\Style\Border;
-use PhpOffice\PhpSpreadsheet\Style\Fill;
+use App\Services\ReportService;
+use App\Exports\GenericReportExport;
+use Barryvdh\DomPDF\Facade\Pdf;
+use Maatwebsite\Excel\Facades\Excel;
+use App\Models\Category;
 
 new class extends Component
 {
     use Toast;
 
-    public string $activeReport = '';
+    // UI y Filtros Generales
+    public bool $previewModal = false;
+    public string $currentType = '';
+    public string $currentTitle = '';
+
+    // Filtros de Fecha (Arqueo y Egresos)
     public string $startDate = '';
     public string $endDate = '';
-    public string $productReportMode = 'inventario';
-    public bool $reportGenerated = false;
-    public float $cashExchangeRate = 36.5;
 
+    // Filtros de Productos
+    public $categories = [];
+    public string $filterCategory = '';
+    public string $filterStatus = '';
+    public string $filterStock = '';
+
+    // Datos de la tabla
+    public array $previewHeaders = [];
+    public array $previewData = [];
+    public array $previewTotals = [];
+
+    // Arreglo de reportes operativos
     public array $operationalReports = [
         [
             'title' => 'Reporte de Compra',
@@ -67,21 +63,22 @@ new class extends Component
             'type' => 'devoluciones',
         ],
         [
-            'title' => 'Reporte de Salidas de Inventario',
-            'description' => 'Consulta las salidas registradas por bajas, mermas o ajustes.',
-            'icon' => 'o-archive-box-x-mark',
-            'color' => 'border-info',
-            'type' => 'salidas de inventario',
-        ],
-        [
             'title' => 'Reporte de Arqueo de Caja',
             'description' => 'Obtiene el resumen de caja, movimientos y cierre de turno.',
             'icon' => 'o-calculator',
             'color' => 'border-error',
             'type' => 'arqueo de caja',
         ],
+        [
+            'title' => 'Reporte de Egresos',
+            'description' => 'Historial de gastos, vales y salidas de dinero de caja.',
+            'icon' => 'o-arrow-trending-down',
+            'color' => 'border-error',
+            'type' => 'egresos',
+        ],
     ];
 
+    // Arreglo de reportes de registros
     public array $registryReports = [
         [
             'title' => 'Lista de Productos',
@@ -109,854 +106,109 @@ new class extends Component
         ],
     ];
 
-    public function generate(string $type): void
+    public function updated($property)
     {
-        if (in_array($type, ['compra', 'venta', 'pedidos', 'devoluciones', 'salidas de inventario', 'productos', 'clientes', 'usuarios', 'proveedores', 'arqueo de caja'])) {
-            $this->activeReport = $type;
-            $this->productReportMode = 'inventario';
-            $this->reportGenerated = in_array($type, ['productos', 'clientes', 'usuarios', 'proveedores']);
-            $this->resetValidation();
-            return;
+        $filtros = ['startDate', 'endDate', 'filterCategory', 'filterStatus', 'filterStock'];
+        if (in_array($property, $filtros)) {
+            $this->loadPreviewData();
         }
-
-        $this->info('Preparando reporte de ' . ucfirst($type) . '.', position: 'toast-top toast-center');
     }
 
-    public function backToReports(): void
+    public function openPreview(string $type, string $title): void
     {
-        $this->activeReport = '';
-        $this->reportGenerated = false;
-        $this->reset(['startDate', 'endDate']);
-    }
+        $this->currentType = $type;
+        $this->currentTitle = $title;
 
-    public function buildReport(): void
-    {
-        $rules = [
-            'startDate' => ['nullable', 'date'],
-            'endDate' => ['nullable', 'date', 'after_or_equal:startDate'],
-        ];
-
-        if ($this->activeReport === 'arqueo de caja') {
-            $rules['cashExchangeRate'] = ['required', 'numeric', 'min:0.01'];
+        if ($type === 'productos') {
+            $this->filterCategory = '';
+            $this->filterStatus = '';
+            $this->filterStock = '';
+            $this->categories = Category::orderBy('name')->get();
+        } elseif (in_array($type, ['arqueo de caja', 'egresos'])) {
+            $this->startDate = now()->startOfMonth()->format('Y-m-d');
+            $this->endDate = now()->format('Y-m-d');
         }
 
-        $this->validate($rules, [
-            'endDate.after_or_equal' => 'La fecha fin debe ser igual o posterior a la fecha inicio.',
-            'cashExchangeRate.min' => 'La tasa de cambio debe ser mayor que cero.',
-        ]);
+        $this->loadPreviewData();
+        $this->previewModal = true;
+    }
 
-        $this->reportGenerated = true;
-        $this->success('Reporte generado correctamente.', position: 'toast-top toast-center');
+    public function loadPreviewData()
+    {
+        $reportService = app(ReportService::class);
+        $result = [];
+
+        switch ($this->currentType) {
+            case 'productos':
+                $result = $reportService->getProductsReport($this->filterCategory, $this->filterStatus, $this->filterStock);
+                break;
+            case 'arqueo de caja':
+                $result = $reportService->getCashRegistersReport($this->startDate, $this->endDate);
+                break;
+            case 'egresos':
+                $result = $reportService->getExpensesReport($this->startDate, $this->endDate);
+                break;
+            default:
+                $result = ['headers' => [], 'data' => [], 'totals' => []];
+                break;
+        }
+
+        $this->previewHeaders = array_map(function($header, $index) {
+            return ['key' => 'col_'.$index, 'label' => $header];
+        }, $result['headers'] ?? [], array_keys($result['headers'] ?? []));
+
+        $this->previewData = array_map(function($row) {
+            $formattedRow = [];
+            foreach ($row as $index => $value) {
+                $formattedRow['col_'.$index] = $value;
+            }
+            return $formattedRow;
+        }, $result['data'] ?? []);
+
+        $this->previewTotals = $result['totals'] ?? [];
     }
 
     public function export(string $format)
     {
-        if (!$this->reportGenerated) {
-            $this->buildReport();
+        if (empty($this->previewHeaders) || empty($this->previewData)) {
+            $this->warning('No hay datos para exportar con los filtros actuales.');
+            return;
         }
 
-        $rows = $this->reportRows();
+        $simpleHeaders = array_column($this->previewHeaders, 'label');
+        $simpleData = array_map('array_values', $this->previewData);
 
-        $headers = $this->reportHeaders();
-        $filename = str($this->reportTitle())->lower()->replace(' ', '-')->toString() . '-' . now()->format('Ymd-His');
-
-        return match ($format) {
-            'pdf' => $this->exportPdf($headers, $rows, $filename),
-            'excel' => $this->exportExcel($headers, $rows, $filename),
-            'word' => $this->exportWord($headers, $rows, $filename),
-            default => null,
-        };
-    }
-
-    public function with(): array
-    {
-        return [
-            'reportRows' => $this->reportGenerated
-                ? $this->reportRows()
-                : collect(),
-            'reportHeaders' => $this->reportHeaders(),
-            'reportTitle' => $this->reportTitle(),
-            'reportPeriod' => $this->reportPeriod(),
-            'generatedAt' => now()->format('d/m/Y H:i'),
+        $viewData = [
+            'title' => $this->currentTitle,
+            'headers' => $simpleHeaders,
+            'data' => $simpleData,
+            'totals' => $this->previewTotals,
+            'date' => date('d/m/Y h:i A')
         ];
-    }
 
-    private function reportRows(): Collection
-    {
-        return match ($this->activeReport) {
-            'compra' => $this->purchaseRows(),
-            'venta' => $this->salesRows(),
-            'pedidos' => $this->orderRows(),
-            'devoluciones' => $this->devolutionRows(),
-            'salidas de inventario' => $this->inventoryOutputRows(),
-            'productos' => $this->productRows(),
-            'clientes' => $this->clientRows(),
-            'usuarios' => $this->userRows(),
-            'proveedores' => $this->providerRows(),
-            'arqueo de caja' => $this->cashRegisterRows(),
-            default => collect(),
-        };
-    }
+        $filename = 'reporte_' . strtolower(str_replace(' ', '_', $this->currentType)) . '_' . date('Y_m_d_His');
 
-    private function reportHeaders(): array
-    {
-        return match ($this->activeReport) {
-            'compra' => $this->purchaseHeaders(),
-            'venta' => $this->salesHeaders(),
-            'pedidos' => $this->orderHeaders(),
-            'devoluciones' => $this->devolutionHeaders(),
-            'salidas de inventario' => $this->inventoryOutputHeaders(),
-            'productos' => $this->productHeaders(),
-            'clientes' => $this->clientHeaders(),
-            'usuarios' => $this->userHeaders(),
-            'proveedores' => $this->providerHeaders(),
-            'arqueo de caja' => $this->cashRegisterHeaders(),
-            default => [],
-        };
-    }
+        if ($format === 'excel') {
+            return Excel::download(new GenericReportExport($viewData), "{$filename}.xlsx");
+        }
 
-    public function showInventoryReport(): void
-    {
-        $this->productReportMode = 'inventario';
-        $this->reportGenerated = true;
-    }
+        if ($format === 'pdf') {
+            $pdf = Pdf::loadView('reports.template', $viewData)->setPaper('a4', 'landscape');
+            return response()->streamDownload(fn () => print($pdf->output()), "{$filename}.pdf");
+        }
 
-    public function showLowStockReport(): void
-    {
-        $this->productReportMode = 'agotarse';
-        $this->reportGenerated = true;
-    }
-
-    private function purchaseRows(): Collection
-    {
-        $purchases = Purchase::query()
-            ->with(['provider', 'items.product.category', 'items.product.unit'])
-            ->when($this->startDate, fn($query) => $query->whereDate('purchase_date', '>=', $this->startDate))
-            ->when($this->endDate, fn($query) => $query->whereDate('purchase_date', '<=', $this->endDate))
-            ->orderBy('purchase_date')
-            ->get();
-
-        $rows = $purchases->flatMap(function ($purchase) {
-            return $purchase->items->map(function ($item, $index) use ($purchase) {
-                return [
-                    '#' => $purchase->id . '-' . ($index + 1),
-                    'Fecha' => Carbon::parse($purchase->purchase_date)->format('d/m/Y'),
-                    'No factura' => $purchase->provider_invoice_number ?? 'Sin factura',
-                    'Proveedor' => $purchase->provider->company_name ?? 'Sin proveedor',
-                    'Producto' => $item->product->name ?? 'Producto no disponible',
-                    'Categoria' => $item->product->category->name ?? 'Sin categoria',
-                    'Unidad de medida' => $item->product->unit->name ?? 'Und',
-                    'Precio de compra' => 'C$ ' . number_format((float) $item->cost_price, 2),
-                    'Cantidad' => number_format((float) $item->quantity, 2),
-                    'Total' => 'C$ ' . number_format((float) $item->subtotal, 2),
-                ];
-            });
-        });
-
-        return $this->appendTotalRow(
-            $rows,
-            $this->purchaseHeaders(),
-            'Cantidad',
-            'Total',
-            'Total Compras',
-            (float) $purchases->sum('total')
-        );
-    }
-
-    private function salesRows(): Collection
-    {
-        $invoices = Invoice::query()
-            ->with(['client', 'items.product.category', 'items.product.unit'])
-            ->where('status', '!=', 'Anulada')
-            ->when($this->startDate, fn($query) => $query->whereDate('invoice_date', '>=', $this->startDate))
-            ->when($this->endDate, fn($query) => $query->whereDate('invoice_date', '<=', $this->endDate))
-            ->orderBy('invoice_date')
-            ->get();
-
-        $rows = $invoices->flatMap(function ($invoice) {
-                return $invoice->items->map(function ($item, $index) use ($invoice) {
-                    return [
-                        '#' => $invoice->id . '-' . ($index + 1),
-                        'Fecha' => Carbon::parse($invoice->invoice_date)->format('d/m/Y'),
-                        'No.Factura' => $invoice->invoice_number,
-                        'Cliente' => $invoice->client->name ?? 'Cliente General',
-                        'Producto' => $item->description,
-                        'Categoria' => $item->product->category->name ?? 'Sin categoria',
-                        'Unidad/Medida' => $item->product->unit->name ?? 'Und',
-                        'Precio de venta' => 'C$ ' . number_format((float) $item->unit_price, 2),
-                        'Cantidad' => number_format((float) $item->quantity, 2),
-                        'Subtotal' => 'C$ ' . number_format((float) $item->subtotal, 2),
-                        'Total' => 'C$ ' . number_format((float) $invoice->total, 2),
-                    ];
-                });
-            });
-
-        return $this->appendTotalRow(
-            $rows,
-            $this->salesHeaders(),
-            'Subtotal',
-            'Total',
-            'Total Ventas',
-            (float) $invoices->sum('total')
-        );
-    }
-
-    private function orderRows(): Collection
-    {
-        return Order::query()
-            ->with(['client', 'invoice', 'items.product.category', 'items.product.unit'])
-            ->when($this->startDate, fn($query) => $query->whereDate('order_date', '>=', $this->startDate))
-            ->when($this->endDate, fn($query) => $query->whereDate('order_date', '<=', $this->endDate))
-            ->orderBy('order_date')
-            ->get()
-            ->flatMap(function ($order) {
-                return $order->items->map(function ($item, $index) use ($order) {
-                    return [
-                        '#' => $order->id . '-' . ($index + 1),
-                        'Fecha' => Carbon::parse($order->order_date)->format('d/m/Y'),
-                        'Orden' => 'ORD-' . str_pad($order->id, 3, '0', STR_PAD_LEFT),
-                        'Factura' => $order->invoice->invoice_number ?? 'Sin factura',
-                        'Cliente' => $order->client->name ?? 'Sin cliente',
-                        'Producto' => $item->description,
-                        'Categoria' => $item->product->category->name ?? 'Sin categoria',
-                        'Unidad/Medida' => $item->product->unit->name ?? 'Und',
-                        'Precio' => 'C$ ' . number_format((float) $item->unit_price, 2),
-                        'Cantidad' => number_format((float) $item->quantity, 2),
-                        'Subtotal' => 'C$ ' . number_format((float) $item->subtotal, 2),
-                        'Total pedido' => 'C$ ' . number_format((float) $order->estimated_price, 2),
-                        'Estado' => $order->status,
-                    ];
-                });
-            });
-    }
-
-    private function devolutionRows(): Collection
-    {
-        $devolutions = Devolution::query()
-            ->with(['invoice.client', 'items.product.category', 'items.product.unit'])
-            ->when($this->startDate, fn($query) => $query->whereDate('devolution_date', '>=', $this->startDate))
-            ->when($this->endDate, fn($query) => $query->whereDate('devolution_date', '<=', $this->endDate))
-            ->orderBy('devolution_date')
-            ->get();
-
-        $rows = $devolutions->flatMap(function ($devolution) {
-            return $devolution->items->map(function ($item, $index) use ($devolution) {
-                return [
-                    '#' => $devolution->id . '-' . ($index + 1),
-                    'Fecha' => Carbon::parse($devolution->devolution_date)->format('d/m/Y'),
-                    'No factura' => $devolution->invoice->invoice_number ?? 'Sin factura',
-                    'Cliente' => $devolution->invoice->client->name ?? 'Sin cliente',
-                    'Producto' => $item->description,
-                    'Categoria' => $item->product->category->name ?? 'Sin categoria',
-                    'Unidad de medida' => $item->product->unit->name ?? 'Und',
-                    'Motivo de devolucion' => $devolution->reason,
-                    'Precio de venta' => 'C$ ' . number_format((float) $item->unit_price, 2),
-                    'Cantidad devuelta' => number_format((float) $item->quantity, 2),
-                    'Subtotal' => 'C$ ' . number_format((float) $item->amount_returned, 2),
-                    'Total' => 'C$ ' . number_format((float) $devolution->amount_returned, 2),
-                ];
-            });
-        });
-
-        return $this->appendTotalRow(
-            $rows,
-            $this->devolutionHeaders(),
-            'Subtotal',
-            'Total',
-            'Total devoluciones sobre venta',
-            (float) $devolutions->sum('amount_returned')
-        );
-    }
-
-    private function inventoryOutputRows(): Collection
-    {
-        return InventoryOutput::query()
-            ->with(['items.product.category', 'items.product.unit'])
-            ->when($this->startDate, fn($query) => $query->whereDate('output_date', '>=', $this->startDate))
-            ->when($this->endDate, fn($query) => $query->whereDate('output_date', '<=', $this->endDate))
-            ->orderBy('output_date')
-            ->get()
-            ->flatMap(function ($output) {
-                return $output->items->map(function ($item, $index) use ($output) {
-                    return [
-                        '#' => $output->id . '-' . ($index + 1),
-                        'Fecha de salida' => Carbon::parse($output->output_date)->format('d/m/Y'),
-                        'Producto' => $item->description,
-                        'Categoria' => $item->product->category->name ?? 'Sin categoria',
-                        'Unidad de medida' => $item->unit_name ?: ($item->product->unit->name ?? 'Und'),
-                        'Motivo' => $output->reason,
-                        'Cantidad retirada' => number_format((float) $item->quantity, 2),
-                    ];
-                });
-            });
-    }
-
-    private function productRows(): Collection
-    {
-        return Product::query()
-            ->with(['category', 'unit'])
-            ->where('is_active', true)
-            ->where('type', 'Producto')
-            ->when($this->productReportMode === 'agotarse', fn($query) => $query->whereColumn('stock', '<=', 'min_stock'))
-            ->orderBy('name')
-            ->get()
-            ->map(function ($product, $index) {
-                $row = [
-                    '#' => $index + 1,
-                    'Producto' => $product->name,
-                    'Categoria' => $product->category->name ?? 'Sin categoria',
-                    'Unidad de medida' => $product->unit->name ?? 'Und',
-                    'Stock actual' => number_format((float) $product->stock, 2),
-                ];
-
-                if ($this->productReportMode === 'inventario') {
-                    $row['Precio'] = 'C$ ' . number_format((float) $product->sale_price, 2);
-                    $row['Total'] = 'C$ ' . number_format((float) $product->stock * (float) $product->sale_price, 2);
-                }
-
-                return $row;
-            });
-    }
-
-    private function clientRows(): Collection
-    {
-        return Client::query()
-            ->orderBy('name')
-            ->get()
-            ->map(fn($client, $index) => [
-                '#' => $index + 1,
-                'Cliente' => $client->name,
-                'DNI/RUC' => $client->dni ?? 'Sin registro',
-                'Telefono' => $client->phone ?? 'Sin telefono',
-                'Correo' => $client->email ?? 'Sin correo',
-                'Direccion' => $client->address ?? 'Sin direccion',
-                'Estado' => $client->is_active ? 'Activo' : 'Inactivo',
-            ]);
-    }
-
-    private function userRows(): Collection
-    {
-        return User::query()
-            ->orderBy('name')
-            ->get()
-            ->map(fn($user, $index) => [
-                '#' => $index + 1,
-                'Nombre' => $user->name,
-                'Usuario' => $user->username,
-                'Rol' => $user->role,
-                'Estado' => $user->status,
-            ]);
-    }
-
-    private function providerRows(): Collection
-    {
-        return Provider::query()
-            ->orderBy('company_name')
-            ->get()
-            ->map(fn($provider, $index) => [
-                '#' => $index + 1,
-                'Proveedor' => $provider->company_name,
-                'RUC' => $provider->ruc ?? 'Sin registro',
-                'Telefono' => $provider->phone ?? 'Sin telefono',
-                'Correo' => $provider->email ?? 'Sin correo',
-                'Direccion' => $provider->address ?? 'Sin direccion',
-                'Estado' => $provider->is_active ? 'Activo' : 'Inactivo',
-            ]);
-    }
-
-    private function cashRegisterRows(): Collection
-    {
-        $registers = CashRegister::query()
-            ->with('user')
-            ->where('status', 'Cerrada')
-            ->when($this->startDate, fn($query) => $query->whereDate('closed_at', '>=', $this->startDate))
-            ->when($this->endDate, fn($query) => $query->whereDate('closed_at', '<=', $this->endDate))
-            ->orderBy('closed_at')
-            ->get();
-
-        $rows = $registers->map(function ($register) {
-            $cashSales = (float) $register->cash_sales;
-            $physicalBalance = (float) $register->physical_balance;
-            $difference = (float) $register->difference;
-            $surplus = max($difference, 0);
-            $shortage = abs(min($difference, 0));
-
-            return [
-                'Fecha' => Carbon::parse($register->closed_at)->format('d/m/Y'),
-                'Nombre del cajero' => $register->user->name ?? 'Sin cajero',
-                'Total vendido C$' => 'C$ ' . number_format($cashSales, 2),
-                'TOTAL vendido $' => '$ ' . number_format($this->toUsd($cashSales), 2),
-                'Total en caja C$' => 'C$ ' . number_format($physicalBalance, 2),
-                'Total en caja $' => '$ ' . number_format($this->toUsd($physicalBalance), 2),
-                'Sobrante C$' => 'C$ ' . number_format($surplus, 2),
-                'Sobrante $' => '$ ' . number_format($this->toUsd($surplus), 2),
-                'Faltante C$' => 'C$ ' . number_format($shortage, 2),
-                'Faltante $' => '$ ' . number_format($this->toUsd($shortage), 2),
+        if ($format === 'word') {
+            $headers = [
+                "Content-type" => "application/vnd.ms-word",
+                "Content-Disposition" => "attachment;Filename={$filename}.doc"
             ];
-        });
-
-        return $this->appendCashTotalsRow($rows, $registers);
-    }
-
-    private function reportTitle(): string
-    {
-        return match ($this->activeReport) {
-            'compra' => 'Reporte de Compras',
-            'pedidos' => 'Reporte de Pedidos',
-            'devoluciones' => 'Reporte de Devoluciones',
-            'salidas de inventario' => 'Reporte de Salidas de Inventario',
-            'productos' => $this->productReportMode === 'agotarse' ? 'Reporte de Productos Proximos a Agotarse' : 'Reporte de Inventario Actual',
-            'clientes' => 'Reporte de Clientes',
-            'usuarios' => 'Reporte de Usuarios',
-            'proveedores' => 'Reporte de Proveedores',
-            'arqueo de caja' => 'Reporte de Arqueo de Caja',
-            default => 'Reporte de Ventas',
-        };
-    }
-
-    private function reportPeriod(): string
-    {
-        if (!$this->startDate && !$this->endDate) {
-            if (in_array($this->activeReport, ['productos', 'clientes', 'usuarios', 'proveedores'])) {
-                return $this->activeReport === 'productos' ? 'Inventario actual' : 'Listado actual';
-            }
-
-            return 'Historico completo';
+            return response()->streamDownload(fn () => print(view('reports.template', $viewData)->render()), "{$filename}.doc", $headers);
         }
-
-        return 'Del ' . ($this->startDate ? date('d/m/Y', strtotime($this->startDate)) : 'inicio')
-            . ' al ' . ($this->endDate ? date('d/m/Y', strtotime($this->endDate)) : 'actual');
-    }
-
-    private function salesHeaders(): array
-    {
-        return ['#', 'Fecha', 'No.Factura', 'Cliente', 'Producto', 'Categoria', 'Unidad/Medida', 'Precio de venta', 'Cantidad', 'Subtotal', 'Total'];
-    }
-
-    private function purchaseHeaders(): array
-    {
-        return ['#', 'Fecha', 'No factura', 'Proveedor', 'Producto', 'Categoria', 'Unidad de medida', 'Precio de compra', 'Cantidad', 'Total'];
-    }
-
-    private function orderHeaders(): array
-    {
-        return ['#', 'Fecha', 'Orden', 'Factura', 'Cliente', 'Producto', 'Categoria', 'Unidad/Medida', 'Precio', 'Cantidad', 'Subtotal', 'Total pedido', 'Estado'];
-    }
-
-    private function devolutionHeaders(): array
-    {
-        return ['#', 'Fecha', 'No factura', 'Cliente', 'Producto', 'Categoria', 'Unidad de medida', 'Motivo de devolucion', 'Precio de venta', 'Cantidad devuelta', 'Subtotal', 'Total'];
-    }
-
-    private function inventoryOutputHeaders(): array
-    {
-        return ['#', 'Fecha de salida', 'Producto', 'Categoria', 'Unidad de medida', 'Motivo', 'Cantidad retirada'];
-    }
-
-    private function productHeaders(): array
-    {
-        if ($this->productReportMode === 'agotarse') {
-            return ['#', 'Producto', 'Categoria', 'Unidad de medida', 'Stock actual'];
-        }
-
-        return ['#', 'Producto', 'Categoria', 'Unidad de medida', 'Stock actual', 'Precio', 'Total'];
-    }
-
-    private function clientHeaders(): array
-    {
-        return ['#', 'Cliente', 'DNI/RUC', 'Telefono', 'Correo', 'Direccion', 'Estado'];
-    }
-
-    private function userHeaders(): array
-    {
-        return ['#', 'Nombre', 'Usuario', 'Rol', 'Estado'];
-    }
-
-    private function providerHeaders(): array
-    {
-        return ['#', 'Proveedor', 'RUC', 'Telefono', 'Correo', 'Direccion', 'Estado'];
-    }
-
-    private function cashRegisterHeaders(): array
-    {
-        return ['Fecha', 'Nombre del cajero', 'Total vendido C$', 'TOTAL vendido $', 'Total en caja C$', 'Total en caja $', 'Sobrante C$', 'Sobrante $', 'Faltante C$', 'Faltante $'];
-    }
-
-    private function appendTotalRow(Collection $rows, array $headers, string $labelColumn, string $totalColumn, string $label, float $total): Collection
-    {
-        if ($rows->isEmpty()) {
-            return $rows;
-        }
-
-        $totalRow = collect($headers)->mapWithKeys(fn($header) => [$header => ''])->all();
-        $totalRow[$labelColumn] = $label;
-        $totalRow[$totalColumn] = 'C$ ' . number_format($total, 2);
-        $totalRow['_is_total'] = true;
-
-        return $rows->push($totalRow);
-    }
-
-    private function appendCashTotalsRow(Collection $rows, Collection $registers): Collection
-    {
-        if ($rows->isEmpty()) {
-            return $rows;
-        }
-
-        $cashSales = (float) $registers->sum('cash_sales');
-        $physicalBalance = (float) $registers->sum('physical_balance');
-        $surplus = (float) $registers->sum(fn($register) => max((float) $register->difference, 0));
-        $shortage = (float) $registers->sum(fn($register) => abs(min((float) $register->difference, 0)));
-
-        return $rows->push([
-            'Fecha' => 'Totales',
-            'Nombre del cajero' => '',
-            'Total vendido C$' => 'C$ ' . number_format($cashSales, 2),
-            'TOTAL vendido $' => '$ ' . number_format($this->toUsd($cashSales), 2),
-            'Total en caja C$' => 'C$ ' . number_format($physicalBalance, 2),
-            'Total en caja $' => '$ ' . number_format($this->toUsd($physicalBalance), 2),
-            'Sobrante C$' => 'C$ ' . number_format($surplus, 2),
-            'Sobrante $' => '$ ' . number_format($this->toUsd($surplus), 2),
-            'Faltante C$' => 'C$ ' . number_format($shortage, 2),
-            'Faltante $' => '$ ' . number_format($this->toUsd($shortage), 2),
-            '_is_total' => true,
-        ]);
-    }
-
-    private function toUsd(float $amount): float
-    {
-        return $this->cashExchangeRate > 0 ? $amount / $this->cashExchangeRate : 0;
-    }
-
-   private function exportPdf(array $headers, Collection $rows, string $filename)
-    {
-        if ($rows->count() > 500) {
-            $this->error('El PDF tiene demasiadas filas. Filtra por fechas o usa Excel para el historico completo.', position: 'toast-top toast-center');
-            return null;
-        }
-
-        ini_set('memory_limit', '1024M');
-
-        // 1. Guardamos el PDF generado en una variable en lugar de retornarlo de golpe
-        $pdf = Pdf::setOptions([
-            'isRemoteEnabled' => false,
-            'isHtml5ParserEnabled' => true,
-            'isFontSubsettingEnabled' => true,
-            'dpi' => 72,
-            'defaultFont' => 'DejaVu Sans',
-        ])->loadView('livewire.pages.reportes-pdf', [
-            'title' => $this->reportTitle(),
-            'period' => $this->reportPeriod(),
-            'generatedAt' => now()->format('d/m/Y H:i'),
-            'headers' => $headers,
-            'rows' => $rows,
-        ])->setPaper('a4', 'landscape');
-
-        // 2. Usamos el sistema nativo de Laravel para forzar a Livewire a descargar el archivo
-        return response()->streamDownload(function () use ($pdf) {
-            echo $pdf->output();
-        }, $filename . '.pdf');
-    }
-
-    private function exportExcel(array $headers, Collection $rows, string $filename)
-    {
-        $export = new class($headers, $rows, $this->reportTitle(), $this->reportPeriod()) implements FromArray, ShouldAutoSize, WithEvents {
-            public function __construct(
-                private array $headers,
-                private Collection $rows,
-                private string $title,
-                private string $period
-            ) {}
-
-            public function array(): array
-            {
-                $dataRows = $this->rows
-                    ->map(fn($row) => collect($this->headers)->map(fn($header) => $row[$header])->all())
-                    ->all();
-
-                return [
-                    ['Imprenta Minerva'],
-                    ['Matagalpa'],
-                    [$this->title],
-                    ['Periodo', $this->period],
-                    ['Fecha de generacion', now()->format('d/m/Y H:i')],
-                    [],
-                    $this->headers,
-                    ...$dataRows,
-                ];
-            }
-
-            public function registerEvents(): array
-            {
-                return [
-                    AfterSheet::class => function (AfterSheet $event) {
-                        $sheet = $event->sheet->getDelegate();
-                        $lastColumn = $sheet->getHighestColumn();
-                        $lastRow = $sheet->getHighestRow();
-                        $tableHeaderRow = 7;
-
-                        $sheet->mergeCells("A1:{$lastColumn}1");
-                        $sheet->mergeCells("A2:{$lastColumn}2");
-                        $sheet->mergeCells("A3:{$lastColumn}3");
-                        $sheet->mergeCells("B4:{$lastColumn}4");
-                        $sheet->mergeCells("B5:{$lastColumn}5");
-
-                        $sheet->getStyle("A1:A3")->applyFromArray([
-                            'font' => ['bold' => true, 'size' => 14, 'color' => ['rgb' => '111827']],
-                            'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER],
-                        ]);
-
-                        $sheet->getStyle("A4:B5")->applyFromArray([
-                            'font' => ['bold' => true],
-                            'alignment' => ['horizontal' => Alignment::HORIZONTAL_LEFT],
-                        ]);
-
-                        $sheet->getStyle("A{$tableHeaderRow}:{$lastColumn}{$tableHeaderRow}")->applyFromArray([
-                            'font' => ['bold' => true, 'color' => ['rgb' => 'FFFFFF']],
-                            'fill' => [
-                                'fillType' => Fill::FILL_SOLID,
-                                'startColor' => ['rgb' => '2563EB'],
-                            ],
-                            'alignment' => [
-                                'horizontal' => Alignment::HORIZONTAL_CENTER,
-                                'vertical' => Alignment::VERTICAL_CENTER,
-                            ],
-                        ]);
-
-                        $sheet->getStyle("A{$tableHeaderRow}:{$lastColumn}{$lastRow}")->applyFromArray([
-                            'borders' => [
-                                'allBorders' => [
-                                    'borderStyle' => Border::BORDER_THIN,
-                                    'color' => ['rgb' => '9CA3AF'],
-                                ],
-                            ],
-                            'alignment' => [
-                                'vertical' => Alignment::VERTICAL_CENTER,
-                                'wrapText' => true,
-                            ],
-                        ]);
-
-                        if ($lastRow >= 8) {
-                            $sheet->getStyle("A8:{$lastColumn}{$lastRow}")->applyFromArray([
-                                'fill' => [
-                                    'fillType' => Fill::FILL_SOLID,
-                                    'startColor' => ['rgb' => 'F9FAFB'],
-                                ],
-                            ]);
-                        }
-
-                        if ($lastRow > $tableHeaderRow && !empty($this->rows->last()['_is_total'])) {
-                            $sheet->getStyle("A{$lastRow}:{$lastColumn}{$lastRow}")->applyFromArray([
-                                'font' => ['bold' => true],
-                                'fill' => [
-                                    'fillType' => Fill::FILL_SOLID,
-                                    'startColor' => ['rgb' => 'DBEAFE'],
-                                ],
-                            ]);
-                        }
-
-                        $sheet->freezePane('A8');
-                        $sheet->setAutoFilter("A{$tableHeaderRow}:{$lastColumn}{$lastRow}");
-                    },
-                ];
-            }
-        };
-
-        return Excel::download($export, $filename . '.xlsx');
-    }
-
-    private function exportWord(array $headers, Collection $rows, string $filename)
-    {
-        $phpWord = new PhpWord();
-        $phpWord->addTitleStyle(1, ['bold' => true, 'size' => 16]);
-
-        $section = $phpWord->addSection(['orientation' => 'landscape']);
-        $section->addText('Imprenta Minerva', ['bold' => true, 'size' => 16]);
-        $section->addText('Matagalpa');
-        $section->addText($this->reportTitle(), ['bold' => true, 'size' => 13]);
-        $section->addText('Periodo: ' . $this->reportPeriod());
-        $section->addText('Fecha de generacion: ' . now()->format('d/m/Y H:i'));
-        $section->addTextBreak();
-
-        $table = $section->addTable([
-            'borderSize' => 6,
-            'borderColor' => '999999',
-            'cellMargin' => 80,
-        ]);
-
-        $table->addRow();
-        foreach ($headers as $header) {
-            $table->addCell(1500)->addText($header, ['bold' => true, 'size' => 8]);
-        }
-
-        foreach ($rows as $row) {
-            $table->addRow();
-            $font = !empty($row['_is_total']) ? ['bold' => true, 'size' => 8] : ['size' => 8];
-
-            foreach ($headers as $header) {
-                $table->addCell(1500)->addText((string) $row[$header], $font);
-            }
-        }
-
-        if ($rows->isEmpty()) {
-            $table->addRow();
-            $table->addCell(6000, ['gridSpan' => count($headers)])->addText('No hay registros para el periodo seleccionado.');
-        }
-
-        $tempBase = tempnam(sys_get_temp_dir(), 'reporte-');
-        $path = $tempBase . '.docx';
-        @unlink($tempBase);
-
-        IOFactory::createWriter($phpWord, 'Word2007')->save($path);
-
-        return response()->download($path, $filename . '.docx')->deleteFileAfterSend(true);
     }
 };
 ?>
 
 <div>
-    @if($activeReport)
-        <div class="space-y-5">
-            <x-header :title="$reportTitle" subtitle="Imprenta Minerva, Matagalpa" separator>
-                <x-slot:actions>
-                    <x-button label="Volver" icon="o-arrow-left" wire:click="backToReports" class="btn-ghost" />
-                </x-slot:actions>
-            </x-header>
-
-            <x-card shadow class="bg-base-100">
-                @if(in_array($activeReport, ['productos', 'clientes', 'usuarios', 'proveedores']))
-                    <div class="flex flex-col xl:flex-row xl:items-end xl:justify-between gap-4">
-                        <div class="xl:w-[560px]">
-                            @if($activeReport === 'productos')
-                                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                                    <x-button
-                                        label="Inventario actual"
-                                        icon="o-archive-box"
-                                        wire:click="showInventoryReport"
-                                        class="w-full {{ $productReportMode === 'inventario' ? 'btn-primary' : 'btn-outline' }}"
-                                    />
-                                    <x-button
-                                        label="Proximos a agotarse"
-                                        icon="o-exclamation-triangle"
-                                        wire:click="showLowStockReport"
-                                        class="w-full {{ $productReportMode === 'agotarse' ? 'btn-warning' : 'btn-outline' }}"
-                                    />
-                                </div>
-                            @else
-                                <x-alert
-                                    title="Listado actual"
-                                    description="Este reporte no requiere parametros de fecha."
-                                    icon="o-information-circle"
-                                    class="alert-info py-2"
-                                />
-                            @endif
-                        </div>
-
-                        <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 xl:w-[420px]">
-                            <x-button label="PDF" icon="o-document-arrow-down" wire:click="export('pdf')" spinner="export" class="btn-outline" />
-                            <x-button label="Excel" icon="o-table-cells" wire:click="export('excel')" spinner="export" class="btn-outline btn-success" />
-                            <x-button label="Word" icon="o-document-text" wire:click="export('word')" spinner="export" class="btn-outline btn-info" />
-                        </div>
-                    </div>
-                @else
-                    <div class="grid grid-cols-1 xl:grid-cols-12 gap-4 items-end">
-                        <div class="xl:col-span-3">
-                            <x-input label="Fecha inicio:" wire:model="startDate" type="date" icon="o-calendar-days" />
-                        </div>
-                        <div class="xl:col-span-3">
-                            <x-input label="Fecha Fin:" wire:model="endDate" type="date" icon="o-calendar-days" />
-                        </div>
-                        @if($activeReport === 'arqueo de caja')
-                            <div class="xl:col-span-2">
-                                <x-input label="Tasa C$/$" wire:model="cashExchangeRate" type="number" step="0.01" icon="o-arrows-right-left" />
-                            </div>
-                        @endif
-                        <div class="{{ $activeReport === 'arqueo de caja' ? 'xl:col-span-1' : 'xl:col-span-2' }}">
-                            <x-button label="Generar" icon="o-magnifying-glass" wire:click="buildReport" spinner="buildReport" class="btn-primary w-full" />
-                        </div>
-                        <div class="{{ $activeReport === 'arqueo de caja' ? 'xl:col-span-3' : 'xl:col-span-4' }}">
-                            <div class="grid grid-cols-3 gap-2">
-                                <x-button label="PDF" icon="o-document-arrow-down" wire:click="export('pdf')" spinner="export" class="btn-outline" />
-                                <x-button label="Excel" icon="o-table-cells" wire:click="export('excel')" spinner="export" class="btn-outline btn-success" />
-                                <x-button label="Word" icon="o-document-text" wire:click="export('word')" spinner="export" class="btn-outline btn-info" />
-                            </div>
-                        </div>
-                    </div>
-                @endif
-                @error('endDate')
-                    <p class="text-error text-sm mt-3">{{ $message }}</p>
-                @enderror
-            </x-card>
-
-            @if($reportGenerated)
-                <section id="printable-report" class="bg-white border border-base-300 rounded-lg overflow-hidden">
-                    <div class="p-5 border-b border-base-300 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-                        <div class="flex items-center gap-4">
-                            <div class="w-16 h-16 rounded-lg border border-base-300 flex items-center justify-center bg-base-100">
-                                <x-icon name="o-printer" class="w-10 h-10 text-primary" />
-                            </div>
-                            <div>
-                                <h2 class="font-black text-xl text-base-content">Imprenta Minerva</h2>
-                                <p class="text-sm text-gray-500">Matagalpa</p>
-                                <p class="text-sm font-semibold mt-1">{{ $reportTitle }}</p>
-                            </div>
-                        </div>
-
-                        <div class="text-sm md:text-right space-y-1">
-                            <p><span class="font-bold">Periodo:</span> {{ $reportPeriod }}</p>
-                            <p><span class="font-bold">Fecha de generacion:</span> {{ $generatedAt }}</p>
-                        </div>
-                    </div>
-
-                    <div class="overflow-x-auto">
-                        <table class="table table-zebra table-sm w-full">
-                            <thead>
-                                <tr>
-                                    @foreach($reportHeaders as $header)
-                                        <th>{{ $header }}</th>
-                                    @endforeach
-                                </tr>
-                            </thead>
-                            <tbody>
-                                @forelse($reportRows as $row)
-                                    <tr @class(['font-bold bg-primary/10' => !empty($row['_is_total'])])>
-                                        @foreach($reportHeaders as $header)
-                                            <td>{{ $row[$header] }}</td>
-                                        @endforeach
-                                    </tr>
-                                @empty
-                                    <tr>
-                                        <td colspan="{{ count($reportHeaders) }}" class="text-center py-8 text-gray-500">
-                                            No hay registros para el periodo seleccionado.
-                                        </td>
-                                    </tr>
-                                @endforelse
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
-            @endif
-        </div>
-
-        <style>
-            @media print {
-                body * {
-                    visibility: hidden;
-                }
-
-                #printable-report, #printable-report * {
-                    visibility: visible;
-                }
-
-                #printable-report {
-                    position: absolute;
-                    left: 0;
-                    top: 0;
-                    width: 100%;
-                    border: 0;
-                }
-            }
-        </style>
-    @else
     <x-header title="Reportes del Sistema" subtitle="Generacion de reportes operativos y registros maestros" separator>
         <x-slot:actions>
             <x-button label="Panel de Control" icon="o-home" link="/" class="btn-ghost" />
@@ -984,8 +236,8 @@ new class extends Component
                                 <x-button
                                     label="Generar Reporte"
                                     icon="o-document-arrow-down"
-                                    wire:click="generate('{{ $report['type'] }}')"
-                                    spinner="generate"
+                                    wire:click="openPreview('{{ $report['type'] }}', '{{ $report['title'] }}')"
+                                    spinner
                                     class="btn-primary w-full"
                                 />
                             </div>
@@ -1042,8 +294,8 @@ new class extends Component
                         <x-button
                             label="Generar Reporte"
                             icon="o-document-arrow-down"
-                            wire:click="generate('{{ $report['route'] }}')"
-                            spinner="generate"
+                            wire:click="openPreview('{{ $report['route'] }}', '{{ $report['title'] }}')"
+                            spinner
                             class="btn-outline btn-secondary w-full"
                         />
                     </div>
@@ -1051,5 +303,52 @@ new class extends Component
             @endforeach
         </div>
     </x-card>
-    @endif
+
+    <x-modal wire:model="previewModal" title="{{ $currentTitle }}" subtitle="Vista Previa de Impresión" separator class="backdrop-blur-sm" box-class="max-w-6xl">
+
+        @if(in_array($currentType, ['arqueo de caja', 'egresos']))
+            <div class="grid grid-cols-2 gap-4 mb-6 bg-base-200 p-4 rounded-lg">
+                <x-input label="Fecha de Inicio" type="date" wire:model.live="startDate" icon="o-calendar" />
+                <x-input label="Fecha de Fin" type="date" wire:model.live="endDate" icon="o-calendar" />
+            </div>
+        @endif
+
+        @if($currentType === 'productos')
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6 bg-base-200 p-4 rounded-lg">
+                <x-select label="Filtrar por Categoría" wire:model.live="filterCategory" :options="$categories" placeholder="Todas las categorías" option-value="id" option-label="name" icon="o-tag" />
+                <x-select label="Estado" wire:model.live="filterStatus" :options="[['id' => 'activos', 'name' => 'Solo Activos'], ['id' => 'inactivos', 'name' => 'Solo Inactivos']]" placeholder="Todos los estados" icon="o-check-circle" />
+                <x-select label="Nivel de Stock" wire:model.live="filterStock" :options="[['id' => 'bajo', 'name' => 'Stock Bajo (Crítico)'], ['id' => 'agotado', 'name' => 'Agotados (Stock 0)']]" placeholder="Cualquier cantidad" icon="o-cube" />
+            </div>
+        @endif
+
+        <div class="max-h-96 overflow-y-auto border border-base-300 rounded-lg bg-base-100">
+            @if(count($previewData) > 0)
+                <x-table :headers="$previewHeaders" :rows="$previewData" striped class="text-sm" />
+
+                @if(!empty($previewTotals))
+<div class="bg-base-200 p-4 font-bold grid gap-2 text-sm border-t border-base-300" style="grid-template-columns: repeat({{ count($previewTotals) }}, minmax(0, 1fr));">                        @foreach($previewTotals as $total)
+                            <div class="text-center">{{ $total }}</div>
+                        @endforeach
+                    </div>
+                @endif
+            @else
+                <div class="p-10 text-center text-gray-400">
+                    <x-icon name="o-inbox" class="w-12 h-12 mx-auto mb-3" />
+                    <p>No hay datos registrados con los filtros actuales.</p>
+                </div>
+            @endif
+        </div>
+
+        <x-slot:actions>
+            <div class="flex justify-between w-full">
+                <x-button label="Cerrar" @click="$wire.previewModal = false" class="btn-ghost" />
+
+                <div class="flex gap-2">
+                    <x-button label="Word" icon="o-document-text" wire:click="export('word')" class="btn-info text-white" :disabled="count($previewData) == 0" spinner="export" />
+                    <x-button label="Excel" icon="o-table-cells" wire:click="export('excel')" class="btn-success text-white" :disabled="count($previewData) == 0" spinner="export" />
+                    <x-button label="PDF" icon="o-document-arrow-down" wire:click="export('pdf')" class="btn-error text-white" :disabled="count($previewData) == 0" spinner="export" />
+                </div>
+            </div>
+        </x-slot:actions>
+    </x-modal>
 </div>
