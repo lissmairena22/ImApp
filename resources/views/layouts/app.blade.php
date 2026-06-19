@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="{{ str_replace('_', '-', app()->getLocale()) }}" data-theme="light">
 <head>
+    <script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/mask@3.x.x/dist/cdn.min.js"></script>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover">
     <meta name="csrf-token" content="{{ csrf_token() }}">
@@ -77,7 +78,6 @@
                 <x-menu-separator />
                 <x-menu-sub title="Configuración" icon="o-cog-8-tooth">
                     <x-menu-item title="Usuarios" icon="o-users" link="/usuarios" />
-                    <x-menu-item title="Cajas y Turnos" icon="o-calculator" link="/cajas" />
                     <x-menu-item title="Arqueo de Caja" icon="o-banknotes" link="{{ route('arqueo') }}" />
                     <x-menu-item title="Egresos" icon="o-banknotes" link="{{ route('egresos') }}" />
 

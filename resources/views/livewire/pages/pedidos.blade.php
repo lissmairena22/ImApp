@@ -4,19 +4,26 @@ use Livewire\Volt\Component;
 use Livewire\WithPagination;
 use App\Models\Order;
 use Mary\Traits\Toast;
+use Carbon\Carbon;
 
 new class extends Component {
     use WithPagination;
     use Toast;
 
     public string $search = '';
+    public string $filter = 'Activas';
 
     public function updatedSearch()
     {
         $this->resetPage();
     }
 
-    // Marks the order as delivered. The invoice keeps its payment status.
+    public function setFilter($filterName)
+    {
+        $this->filter = $filterName;
+        $this->resetPage();
+    }
+
     public function deliverOrder($orderId)
     {
         $order = Order::findOrFail($orderId);
@@ -26,11 +33,7 @@ new class extends Component {
             return;
         }
 
-        $order->update([
-            'status' => 'Entregado'
-        ]);
-
-
+        $order->update(['status' => 'Entregado']);
         $this->success('Orden marcada como entregada con éxito');
     }
 
@@ -43,14 +46,10 @@ new class extends Component {
             return;
         }
 
-        $order->update([
-            'status' => 'Cancelado'
-        ]);
+        $order->update(['status' => 'Cancelado']);
 
         if ($order->invoice) {
-            $order->invoice->update([
-                'status' => 'Anulada'
-            ]);
+            $order->invoice->update(['status' => 'Anulada']);
         }
 
         $this->success('Orden cancelada correctamente');
@@ -58,27 +57,41 @@ new class extends Component {
 
     public function with(): array
     {
-        // Modificamos el whereIn para incluir 'Entregado' y 'Cancelado' y que no desaparezcan
+        $statusFilter = match($this->filter) {
+            'Activas' => ['Pendiente', 'EnProceso'],
+            'Entregadas' => ['Entregado'],
+            'Canceladas' => ['Cancelado'],
+            default => ['Pendiente', 'EnProceso', 'Entregado', 'Cancelado']
+        };
+
         $orders = Order::query()
             ->with(['client', 'user', 'invoice'])
-            ->whereIn('status', ['Pendiente', 'EnProceso', 'Entregado', 'Cancelado'])
+            ->whereIn('status', $statusFilter)
             ->when($this->search, function($q) {
                 $q->whereHas('client', function($query) {
                     $query->where('name', 'like', "%{$this->search}%");
                 })
                 ->orWhere('id', 'like', "%{$this->search}%");
             })
+            ->orderBy('estimated_delivery_date', 'asc')
             ->orderBy('id', 'desc')
             ->paginate(10);
 
+        $stats = [
+            'pendientes' => Order::where('status', 'Pendiente')->count(),
+            'enProceso' => Order::where('status', 'EnProceso')->count(),
+            'entregadas' => Order::where('status', 'Entregado')->whereDate('updated_at', today())->count(),
+            'totalActivas' => Order::whereIn('status', ['Pendiente', 'EnProceso'])->count(),
+        ];
+
         return [
             'orders' => $orders,
-            // El contador sigue midiendo solo las activas (producción/espera)
-            'totalOrders' => Order::whereIn('status', ['Pendiente', 'EnProceso'])->count(),
+            'stats' => $stats,
             'headers' => [
                 ['key' => 'id', 'label' => 'ORDEN'],
                 ['key' => 'cliente', 'label' => 'CLIENTE'],
-                ['key' => 'factura', 'label' => 'FACTURA'],
+                ['key' => 'delivery_date', 'label' => 'ENTREGA'],
+                ['key' => 'factura', 'label' => 'FACTURA / PAGO'],
                 ['key' => 'total', 'label' => 'TOTAL'],
                 ['key' => 'status', 'label' => 'ESTADO'],
                 ['key' => 'actions', 'label' => '', 'sortable' => false]
@@ -89,89 +102,134 @@ new class extends Component {
 ?>
 
 <div>
-    <x-header title="Órdenes en Seguimiento" subtitle="Pedidos en proceso o producción">
-        <x-slot:middle class="justify-end!">
-            <x-input icon="o-magnifying-glass"
-                     placeholder="Buscar cliente o ID..."
-                     wire:model.live.debounce.500ms="search"
-                     clearable />
-        </x-slot:middle>
+    <x-header title="Control de Órdenes y Pedidos" subtitle="Seguimiento de producción y entregas">
     </x-header>
 
-    <div class="grid grid-cols-1 md:grid-cols-1 gap-4 mb-8">
-        <x-stat title="ÓRDENES ACTIVAS"
-                value="{{ $totalOrders }}"
-                icon="o-clock"
-                color="text-warning"
-                class="bg-warning/10" />
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+        <x-stat title="En Espera" value="{{ $stats['pendientes'] }}" icon="o-clock" class="bg-white border-l-4 border-warning shadow-sm hover:shadow-md transition-shadow" />
+        <x-stat title="En Producción" value="{{ $stats['enProceso'] }}" icon="o-cog" class="bg-white border-l-4 border-info shadow-sm hover:shadow-md transition-shadow" />
+        <x-stat title="Entregadas Hoy" value="{{ $stats['entregadas'] }}" icon="o-gift" class="bg-white border-l-4 border-success shadow-sm hover:shadow-md transition-shadow" />
+        <x-stat title="Total Activas" value="{{ $stats['totalActivas'] }}" icon="o-document-duplicate" class="bg-gray-50 border-l-4 border-gray-800 shadow-sm" />
     </div>
 
-    <x-card>
-        <x-table :headers="$headers" :rows="$orders" with-pagination>
+    <div class="flex flex-col md:flex-row justify-between items-center gap-4 bg-white p-4 rounded-t-2xl shadow-sm border-b border-gray-100">
+        <div class="flex gap-2 w-full md:w-auto overflow-x-auto pb-2 md:pb-0">
+            <x-button label="Todas" wire:click="setFilter('Todas')" class="btn-sm {{ $filter === 'Todas' ? 'btn-neutral' : 'btn-ghost border border-gray-200' }}" />
+            <x-button label="Solo Activas" wire:click="setFilter('Activas')" class="btn-sm {{ $filter === 'Activas' ? 'btn-warning text-white' : 'btn-ghost border border-gray-200' }}" />
+            <x-button label="Entregadas" wire:click="setFilter('Entregadas')" class="btn-sm {{ $filter === 'Entregadas' ? 'btn-success text-white' : 'btn-ghost border border-gray-200' }}" />
+            <x-button label="Canceladas" wire:click="setFilter('Canceladas')" class="btn-sm {{ $filter === 'Canceladas' ? 'btn-error text-white' : 'btn-ghost border border-gray-200' }}" />
+        </div>
+
+        <div class="w-full md:w-96 relative">
+            <x-input icon="o-magnifying-glass"
+                     placeholder="Buscar cliente u orden..."
+                     wire:model.live.debounce.500ms="search"
+                     clearable
+                     class="input-sm w-full bg-gray-50" />
+        </div>
+    </div>
+
+    <x-card class="rounded-t-none shadow-sm border-t-0">
+        <x-table :headers="$headers" :rows="$orders" with-pagination class="table-sm">
 
             @scope('cell_id', $order)
-                <strong>ORD-{{ str_pad($order->id, 3, '0', STR_PAD_LEFT) }}</strong>
+                <span class="font-black text-gray-700">ORD-{{ str_pad($order->id, 3, '0', STR_PAD_LEFT) }}</span>
             @endscope
 
             @scope('cell_cliente', $order)
                 <div>
-                    <div class="font-bold">{{ $order->client->name ?? 'Sin cliente' }}</div>
-                    <div class="text-xs text-gray-500">
+                    <div class="font-bold text-gray-800">{{ $order->client->name ?? 'Cliente General' }}</div>
+                    <div class="text-xs text-gray-500 flex items-center gap-1 mt-0.5">
+                        <x-icon name="o-phone" class="w-3 h-3" />
                         {{ $order->client->phone ?? 'Sin teléfono' }}
                     </div>
                 </div>
             @endscope
 
+            @scope('cell_delivery_date', $order)
+                @php
+                   $fechaEntrega = \Carbon\Carbon::parse($order->estimated_delivery_date);
+                    $hoy = \Carbon\Carbon::today();
+                    $esPasado = $fechaEntrega->isPast() && !$fechaEntrega->isToday();
+                    $esHoy = $fechaEntrega->isToday();
+                @endphp
+
+                @if($order->status === 'Entregado' || $order->status === 'Cancelado')
+                    <span class="text-gray-400 text-sm line-through">{{ $fechaEntrega->format('d/m/Y') }}</span>
+                @elseif($esPasado)
+                    <div class="flex items-center gap-1 text-error font-bold tooltip" data-tip="¡Pedido atrasado!">
+                        <x-icon name="o-fire" class="w-4 h-4" />
+                        {{ $fechaEntrega->format('d/m/Y') }}
+                    </div>
+                @elseif($esHoy)
+                    <div class="flex items-center gap-1 text-warning font-bold tooltip" data-tip="Entregar hoy">
+                        <x-icon name="o-exclamation-circle" class="w-4 h-4" />
+                        Hoy
+                    </div>
+                @else
+                    <span class="text-gray-600 font-medium">{{ $fechaEntrega->format('d/m/Y') }}</span>
+                @endif
+            @endscope
+
             @scope('cell_factura', $order)
                 @if($order->invoice)
                     <div>
-                        <div class="font-bold">{{ $order->invoice->invoice_number }}</div>
-                        <div class="text-xs text-gray-500">
+                        <div class="font-bold text-sm">{{ $order->invoice->invoice_number }}</div>
+                        <div class="text-[10px] uppercase font-bold {{ $order->invoice->status === 'Pagada' ? 'text-success' : 'text-error' }}">
                             {{ $order->invoice->status }}
                         </div>
                     </div>
                 @else
-                    <span class="text-gray-400">Sin factura</span>
+                    <span class="text-gray-400 text-sm italic">Sin factura</span>
                 @endif
             @endscope
 
             @scope('cell_total', $order)
-                <span class="font-bold text-primary">
-                    ${{ number_format($order->estimated_price, 2) }}
+                <span class="font-black text-primary">
+                    C$ {{ number_format($order->estimated_price, 2) }}
                 </span>
             @endscope
 
-            {{-- Modificado: Badges dinámicos de color según el estado --}}
             @scope('cell_status', $order)
                 @if($order->status === 'Entregado')
-                    <x-badge value="Entregado" class="badge-success text-white" icon="o-check-circle" />
+                    <x-badge value="Entregado" class="badge-success text-white badge-sm font-bold" icon="o-check-circle" />
                 @elseif($order->status === 'Cancelado')
-                    <x-badge value="Cancelado" class="badge-error text-white" icon="o-x-circle" />
+                    <x-badge value="Cancelado" class="badge-error text-white badge-sm font-bold" icon="o-x-circle" />
+                @elseif($order->status === 'EnProceso')
+                    <x-badge value="En Producción" class="badge-info text-white badge-sm font-bold animate-pulse" icon="o-cog" />
                 @else
-                    <x-badge value="{{ $order->status }}" class="badge-warning" icon="o-clock" />
+                    <x-badge value="En Espera" class="badge-warning text-white badge-sm font-bold" icon="o-clock" />
                 @endif
             @endscope
 
-            {{-- Modificado: Acciones condicionales --}}
             @scope('cell_actions', $order)
-                <div class="flex gap-2">
+                <div class="flex justify-end gap-1">
                     @if(!in_array($order->status, ['Entregado', 'Cancelado']))
-                        {{-- Botón para Entregar --}}
-                        <x-button icon="o-check"
-                                  wire:click="deliverOrder({{ $order->id }})"
-                                  wire:confirm="¿Marcar esta orden y factura como ENTREGADA?"
-                                  class="btn-sm btn-circle btn-ghost text-success" />
-
-                        {{-- Botón para Cancelar --}}
-                        <x-button icon="o-x-circle"
-                                  wire:click="cancelOrder({{ $order->id }})"
-                                  wire:confirm="¿Cancelar esta orden?"
-                                  class="btn-sm btn-circle btn-ghost text-error" />
+                        <div class="tooltip tooltip-left" data-tip="Marcar como Entregado">
+                            <x-button icon="o-check"
+                                      wire:click="deliverOrder({{ $order->id }})"
+                                      wire:confirm="¿Confirmas que el cliente ya recibió su pedido?"
+                                      class="btn-sm btn-circle btn-success text-white shadow-sm hover:scale-110 transition-transform" />
+                        </div>
+                        <div class="tooltip tooltip-left" data-tip="Cancelar Orden">
+                            <x-button icon="o-trash"
+                                      wire:click="cancelOrder({{ $order->id }})"
+                                      wire:confirm="ATENCIÓN: ¿Seguro que deseas cancelar esta orden y anular su factura?"
+                                      class="btn-sm btn-circle btn-error text-white shadow-sm hover:scale-110 transition-transform" />
+                        </div>
                     @else
-                        <span class="text-xs text-gray-400 italic p-1">Finalizada</span>
+                        <span class="text-[10px] text-gray-400 uppercase font-bold tracking-wider bg-gray-100 px-2 py-1 rounded-md">Cerrada</span>
                     @endif
                 </div>
             @endscope
+
+            <x-slot:empty>
+                <div class="text-center py-10">
+                    <x-icon name="o-document-magnifying-glass" class="w-16 h-16 text-gray-300 mx-auto mb-4" />
+                    <p class="text-gray-500 font-bold">No se encontraron órdenes</p>
+                    <p class="text-sm text-gray-400">Intenta cambiar los filtros o los términos de búsqueda.</p>
+                </div>
+            </x-slot:empty>
 
         </x-table>
     </x-card>

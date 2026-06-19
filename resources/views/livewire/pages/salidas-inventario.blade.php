@@ -37,7 +37,6 @@ new class extends Component {
 
         return Product::query()
             ->where('name', 'like', "%{$this->busqueda_producto}%")
-          //  ->orWhere('code', 'like', "%{$this->busqueda_producto}%")
             ->take(5)
             ->get();
     }
@@ -65,7 +64,25 @@ new class extends Component {
 
     public function with(): array
     {
+        // Estadísticas para el Mini-Dashboard
+        $currentMonth = now()->month;
+        $currentYear = now()->year;
+
+        $totalSalidas = InventoryOutput::whereMonth('output_date', $currentMonth)
+                                        ->whereYear('output_date', $currentYear)
+                                        ->count();
+
+        $totalItems = DB::table('inventory_output_items')
+                        ->join('inventory_outputs', 'inventory_output_items.inventory_output_id', '=', 'inventory_outputs.id')
+                        ->whereMonth('inventory_outputs.output_date', $currentMonth)
+                        ->whereYear('inventory_outputs.output_date', $currentYear)
+                        ->sum('quantity');
+
         return [
+            'stats' => [
+                'total_salidas' => $totalSalidas,
+                'total_items' => $totalItems
+            ],
             'headers' => [
                 ['key' => 'id', 'label' => 'CÓDIGO'],
                 ['key' => 'output_date', 'label' => 'FECHA'],
@@ -123,11 +140,12 @@ new class extends Component {
     {
         $this->validate([
             'motivo' => 'required',
-            'fecha' => 'required|date',
+            'fecha' => 'required|date|before_or_equal:today',
             'observaciones' => 'required|min:10',
         ], [
             'motivo.required' => 'Debe seleccionar un motivo de salida.',
             'fecha.required' => 'La fecha es obligatoria.',
+            'fecha.before_or_equal' => 'La fecha de salida no puede ser futura.',
             'observaciones.required' => 'Debe justificar detalladamente la salida (mínimo 10 caracteres).',
         ]);
 
@@ -142,7 +160,7 @@ new class extends Component {
                     'reason' => $this->motivo,
                     'output_date' => $this->fecha,
                     'notes' => $this->observaciones,
-                    'user_id' => auth()->id(),
+                    'user_id' => auth()->id() ?? 1,
                     'created_at' => now(),
                     'updated_at' => now(),
                 ]);
@@ -168,7 +186,7 @@ new class extends Component {
             $this->reset(['motivo', 'observaciones', 'items', 'busqueda_producto', 'producto_seleccionado_id']);
             $this->fecha = date('Y-m-d');
 
-            $this->success('Salida de inventario procesada y stock actualizado correctamente.');
+            $this->success('Salida de inventario procesada y stock actualizado correctamente.', position: 'toast-top toast-center');
 
         } catch (\Exception $e) {
             $this->error('Ocurrió un error crítico al procesar la salida: ' . $e->getMessage());
@@ -176,208 +194,267 @@ new class extends Component {
     }
 }; ?>
 
-<div class="p-6 space-y-6 bg-base-200 min-h-screen">
-    <div class="flex justify-between items-center bg-white p-4 rounded-xl shadow-sm border">
-        <div>
-            <h1 class="text-2xl font-black text-gray-800 flex items-center gap-2">
-                <x-icon name="o-arrow-up-tray" class="w-7 h-7 text-error" />
-                Salidas de Inventario / Ajustes
-            </h1>
-            <p class="text-xs text-gray-500">Registra mermas, pérdidas o consumos internos y actualiza el stock al instante.</p>
+<div class="p-4 bg-gray-50/50 min-h-screen">
+    <div class="max-w-[1400px] mx-auto">
+
+        <x-header title="Salidas y Ajustes" subtitle="Registro de mermas, consumo interno y pérdidas" separator class="mb-6" />
+
+        {{-- Mini-Dashboard Estadístico --}}
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+            <x-stat title="Ajustes este Mes"
+                    value="{{ $stats['total_salidas'] }}"
+                    icon="o-document-minus"
+                    class="bg-white border-l-4 border-orange-500 shadow-sm hover:shadow-md transition-shadow" />
+
+            <x-stat title="Ítems Retirados (Mes)"
+                    value="{{ number_format($stats['total_items']) }}"
+                    icon="o-arrow-trending-down"
+                    class="bg-white border-l-4 border-error shadow-sm hover:shadow-md transition-shadow" />
         </div>
-    </div>
 
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
 
-        <div class="lg:col-span-1 space-y-6">
-            <x-card title="Datos de la Salida" shadow separator class="bg-white">
-                <div class="space-y-4">
-                    <x-select
-                        label="Motivo del Despacho / Salida"
-                        wire:model="motivo"
-                        icon="o-exclamation-triangle"
-                        placeholder="Seleccione un motivo..."
-                        :options="[
-                            ['id' => 'Merma', 'name' => 'Merma / Desecho de Material'],
-                            ['id' => 'Uso Interno', 'name' => 'Uso Interno / Pruebas de Impresión'],
-                            ['id' => 'Ajuste', 'name' => 'Ajuste por Auditoría / Conteo'],
-                            ['id' => 'Robo o Pérdida', 'name' => 'Robo o Pérdida Confirmada']
-                        ]"
-                    />
+            {{-- LADO IZQUIERDO: CONFIGURACIÓN DE LA SALIDA --}}
+            <div class="lg:col-span-4 flex flex-col gap-6">
 
-                    <x-input type="date"  label="Fecha del Movimiento"  wire:model="fecha" icon="o-calendar"  max="{{ date('Y-m-d') }}"
-/>
+                {{-- Datos Generales --}}
+                <div class="bg-white p-5 rounded-3xl shadow-xl border border-gray-100 overflow-hidden relative">
+                    <div class="absolute top-0 right-0 w-32 h-32 bg-error rounded-full blur-3xl opacity-5 -mr-10 -mt-10"></div>
 
-                    <x-textarea
-                        label="Justificación u Observaciones"
-                        wire:model="observaciones"
-                        placeholder="Ej: Se dañaron 5 láminas en la guillotina..."
-                        rows="3"
-                        hint="Obligatorio para auditoría interna."
-                    />
-                </div>
-            </x-card>
+                    <h4 class="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-2 mb-4 relative z-10">
+                        <x-icon name="o-clipboard-document-check" class="w-4 h-4 text-error" /> Detalles del Movimiento
+                    </h4>
 
-            <x-card title="Agregar Producto" shadow separator class="bg-white">
-                <div class="space-y-4 relative">
-                    <x-input
-                        label="Buscar por Nombre o Código"
-                        wire:model.live="busqueda_producto"
-                        placeholder="Escribe al menos 2 letras..."
-                        icon="o-magnifying-glass"
-                    />
-
-                    @if(!empty($this->productosBuscados))
-                        <div class="absolute z-50 w-full bg-white shadow-xl rounded-lg border border-gray-200 mt-1 max-h-56 overflow-y-auto">
-                            @foreach($this->productosBuscados as $prod)
-                                @if($prod)
-                                    <div wire:click="seleccionarProducto({{ $prod->id }})" class="p-3 hover:bg-red-50 cursor-pointer flex justify-between items-center border-b last:border-0 transition-all">
-                                        <div>
-                                            <span class="font-bold text-sm text-gray-800 block">{{ $prod?->name }}</span>
-                                            <span class="text-xs text-gray-400">Código: {{ $prod?->code ?? 'S/C' }}</span>
-                                        </div>
-                                        <span class="badge badge-error text-white font-semibold p-2">Stock: {{ $prod?->stock }}</span>
-                                    </div>
-                                @endif
-                            @endforeach
+                    <div class="space-y-4 relative z-10">
+                        <div>
+                            <x-select
+                                label="Motivo del Despacho *"
+                                wire:model="motivo"
+                                icon="o-exclamation-triangle"
+                                placeholder="Seleccione un motivo..."
+                                :options="[
+                                    ['id' => 'Merma', 'name' => 'Merma / Desecho de Material'],
+                                    ['id' => 'Uso Interno', 'name' => 'Uso Interno / Pruebas'],
+                                    ['id' => 'Ajuste', 'name' => 'Ajuste por Auditoría'],
+                                    ['id' => 'Robo o Pérdida', 'name' => 'Robo o Pérdida Confirmada']
+                                ]"
+                                class="bg-gray-50 focus:bg-white font-bold text-gray-700"
+                            />
                         </div>
-                    @endif
 
-                    @if($producto_seleccionado_id)
-                        <div class="p-3 bg-gray-50 rounded-lg border border-dashed border-gray-300 space-y-2">
-                            <p class="text-xs font-bold text-gray-500 uppercase tracking-wider">Seleccionado actualmente:</p>
-                            <p class="text-sm font-semibold text-gray-800">{{ $nombre_producto_seleccionado }}</p>
-                            <div class="flex justify-between items-center text-xs">
-                                <span class="text-gray-500">Stock Actual en Sistema:</span>
-                                <span class="font-bold text-error">{{ $stock_actual_seleccionado }} uds.</span>
-                            </div>
+                        <div>
+                            <x-input type="date" label="Fecha del Movimiento *" wire:model="fecha" icon="o-calendar" max="{{ date('Y-m-d') }}" class="bg-gray-50 focus:bg-white" />
+                        </div>
 
-                            <div class="pt-2">
-                                <x-input
-                                    type="number"
-                                    label="Cantidad a Retirar"
-                                    wire:model="cantidad_salida"
-                                    placeholder="Ej: 5"
-                                    icon="o-minus-circle"
-                                />
-                            </div>
+                        <div>
+                            <x-textarea
+                                label="Justificación u Observaciones *"
+                                wire:model="observaciones"
+                                placeholder="Describa qué ocurrió y por qué se retira del sistema..."
+                                rows="3"
+                                class="bg-gray-50 focus:bg-white"
+                            />
+                        </div>
+                    </div>
+                </div>
 
-                            <div class="pt-2">
+                {{-- Buscador de Productos --}}
+                <div class="bg-indigo-50/50 p-5 rounded-3xl border border-indigo-100 relative z-40">
+                    <h4 class="text-[10px] font-black text-indigo-400 uppercase tracking-widest flex items-center gap-2 mb-4">
+                        <x-icon name="o-magnifying-glass-plus" class="w-4 h-4" /> Agregar Producto
+                    </h4>
+
+                    <div class="space-y-4 relative">
+                        <div class="relative">
+                            <x-input
+                                label="Buscar por Nombre"
+                                wire:model.live="busqueda_producto"
+                                placeholder="Escribe al menos 2 letras..."
+                                icon="o-magnifying-glass"
+                                class="bg-white shadow-sm"
+                                autocomplete="off"
+                            />
+
+                            @if(!empty($this->productosBuscados))
+                                <div class="absolute z-50 w-full bg-white shadow-2xl rounded-xl border border-gray-100 mt-1 max-h-56 overflow-y-auto">
+                                    @foreach($this->productosBuscados as $prod)
+                                        @if($prod)
+                                            <div wire:click="seleccionarProducto({{ $prod->id }})" class="p-3 hover:bg-indigo-50 cursor-pointer flex justify-between items-center border-b border-gray-50 last:border-0 transition-colors">
+                                                <div>
+                                                    <span class="font-bold text-sm text-gray-800 block">{{ $prod?->name }}</span>
+                                                </div>
+                                                <span class="badge badge-indigo badge-sm font-bold shadow-sm">Stock: {{ $prod?->stock }}</span>
+                                            </div>
+                                        @endif
+                                    @endforeach
+                                </div>
+                            @endif
+                        </div>
+
+                        {{-- Producto Seleccionado --}}
+                        @if($producto_seleccionado_id)
+                            <div class="p-4 bg-white rounded-2xl border-2 border-indigo-200 space-y-3 animate-fade-in shadow-sm">
+                                <div>
+                                    <p class="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Ítem Seleccionado</p>
+                                    <p class="text-sm font-black text-indigo-700 leading-tight">{{ $nombre_producto_seleccionado }}</p>
+                                </div>
+
+                                <div class="flex justify-between items-center bg-gray-50 p-2 rounded-lg border border-gray-100">
+                                    <span class="text-xs font-bold text-gray-500">Stock Actual:</span>
+                                    <span class="font-black text-gray-800">{{ $stock_actual_seleccionado }} uds.</span>
+                                </div>
+
+                                <div>
+                                    <x-input
+                                        type="number"
+                                        label="Cantidad a Retirar"
+                                        wire:model="cantidad_salida"
+                                        placeholder="Ej: 5"
+                                        icon="o-minus-circle"
+                                        class="bg-red-50 text-error font-black border-red-200 focus:border-error focus:ring-error"
+                                    />
+                                </div>
+
                                 <x-button
                                     label="Agregar a la Lista"
                                     wire:click="agregarItem"
                                     icon="o-plus"
-                                    class="btn-error text-white w-full btn-sm"
+                                    class="btn-indigo w-full shadow-sm text-white font-bold mt-1"
                                 />
                             </div>
+                        @endif
+                    </div>
+                </div>
+            </div>
+
+            {{-- LADO DERECHO: LISTA DE DESPACHO --}}
+            <div class="lg:col-span-8 flex flex-col gap-6">
+
+                <div class="bg-white rounded-3xl shadow-xl border border-gray-100 overflow-hidden flex flex-col min-h-[400px]">
+                    <div class="bg-gray-50/50 px-6 py-4 border-b border-gray-100 flex justify-between items-center">
+                        <div>
+                            <h3 class="font-black text-gray-800 text-lg">Mesa de Despacho</h3>
+                            <p class="text-xs text-gray-500 font-medium">Verifique bien las cantidades que se descontarán del sistema.</p>
+                        </div>
+                        <span class="badge badge-error badge-sm text-white font-bold shadow-sm">{{ count($items) }} Ítems</span>
+                    </div>
+
+                    <div class="overflow-x-auto flex-1 p-3">
+                        <table class="w-full text-left">
+                            <thead class="text-[10px] font-black text-gray-400 uppercase tracking-wider border-b border-gray-100">
+                                <tr>
+                                    <th class="px-4 py-3">Producto</th>
+                                    <th class="px-4 py-3 text-center">Stock Actual</th>
+                                    <th class="px-4 py-3 text-center text-error">Salida</th>
+                                    <th class="px-4 py-3 text-center">Stock Final</th>
+                                    <th class="px-4 py-3 text-center"></th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-gray-50">
+                                @forelse($items as $index => $item)
+                                    <tr class="hover:bg-red-50/30 transition-colors group">
+                                        <td class="px-4 py-4 font-bold text-gray-800 text-sm">{{ $item['nombre'] }}</td>
+                                        <td class="px-4 py-4 text-center text-gray-500 font-medium">{{ $item['stock_actual'] }}</td>
+                                        <td class="px-4 py-4 text-center">
+                                            <span class="bg-red-100 text-error font-black px-3 py-1 rounded-lg">
+                                                - {{ $item['cantidad'] }}
+                                            </span>
+                                        </td>
+                                        <td class="px-4 py-4 text-center font-black text-gray-800">
+                                            {{ $item['stock_actual'] - $item['cantidad'] }}
+                                        </td>
+                                        <td class="px-4 py-4 text-center">
+                                            <button
+                                                wire:click="eliminarItem({{ $index }})"
+                                                class="p-2 text-gray-300 hover:text-error hover:bg-error/10 rounded-xl transition-all opacity-0 group-hover:opacity-100"
+                                                title="Quitar"
+                                            >
+                                                <x-icon name="o-trash" class="w-5 h-5" />
+                                            </button>
+                                        </td>
+                                    </tr>
+                                @empty
+                                    <tr>
+                                        <td colspan="5" class="py-16 text-center">
+                                            <div class="flex flex-col items-center justify-center text-gray-300 space-y-3">
+                                                <div class="p-4 bg-gray-50 rounded-full border border-dashed border-gray-200">
+                                                    <x-icon name="o-archive-box-x-mark" class="w-10 h-10 text-gray-300" />
+                                                </div>
+                                                <p class="font-bold text-gray-400">No hay productos en la lista</p>
+                                                <p class="text-xs">Utiliza el buscador de la izquierda para agregar ítems.</p>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                @endforelse
+                            </tbody>
+                        </table>
+                    </div>
+
+                    {{-- Botón de Acción Principal --}}
+                    @if(!empty($items))
+                        <div class="p-6 bg-gray-50/50 border-t border-gray-100">
+                            <button
+                                wire:click="guardarSalida"
+                                wire:loading.attr="disabled"
+                                class="w-full py-4 bg-error hover:bg-red-600 active:bg-red-700 text-white font-black text-lg tracking-widest rounded-2xl shadow-lg hover:shadow-xl hover:-translate-y-1 transition-all flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                <x-icon name="o-arrow-up-tray" class="w-6 h-6" /> PROCESAR SALIDA DE INVENTARIO
+                            </button>
                         </div>
                     @endif
                 </div>
+            </div>
+        </div>
+
+        {{-- HISTORIAL DE SALIDAS --}}
+        <div class="mt-8">
+            <x-card title="Historial de Movimientos" shadow separator class="bg-white rounded-3xl border-gray-100">
+                <x-table :headers="$headers" :rows="$this->salidasHistoricas" with-pagination class="table-sm">
+
+                    @scope('cell_id', $salida)
+                        <span class="font-black text-gray-400">
+                            SAL-{{ str_pad($salida->id, 4, '0', STR_PAD_LEFT) }}
+                        </span>
+                    @endscope
+
+                    @scope('cell_output_date', $salida)
+                        <div class="flex flex-col">
+                            <span class="text-sm font-bold text-gray-700">{{ \Carbon\Carbon::parse($salida->output_date)->format('d/m/Y') }}</span>
+                            <span class="text-[10px] text-gray-400 font-medium">{{ \Carbon\Carbon::parse($salida->created_at)->format('h:i A') }}</span>
+                        </div>
+                    @endscope
+
+                    @scope('cell_reason', $salida)
+                        @php
+                            $color = match($salida->reason) {
+                                'Merma' => 'badge-warning',
+                                'Robo o Pérdida' => 'badge-error text-white',
+                                'Ajuste' => 'badge-info text-white',
+                                default => 'badge-neutral'
+                            };
+                        @endphp
+                        <x-badge value="{{ $salida->reason }}" class="{{ $color }} font-bold shadow-sm" />
+                    @endscope
+
+                    @scope('cell_notes', $salida)
+                        <div class="flex items-start gap-2">
+                            <x-icon name="o-chat-bubble-bottom-center-text" class="w-4 h-4 text-gray-300 mt-0.5" />
+                            <div class="text-sm text-gray-600 font-medium max-w-md line-clamp-2" title="{{ $salida->notes }}">
+                                {{ $salida->notes ?? 'Sin observaciones' }}
+                            </div>
+                        </div>
+                    @endscope
+
+                    <x-slot:empty>
+                        <div class="text-center py-10 text-gray-400">
+                            <x-icon name="o-document-magnifying-glass" class="w-16 h-16 inline mb-4 text-gray-200" />
+                            <h3 class="text-lg font-bold text-gray-500">Historial vacío</h3>
+                            <p class="text-sm">No se han registrado salidas en el sistema.</p>
+                        </div>
+                    </x-slot:empty>
+                </x-table>
             </x-card>
         </div>
 
-        <div class="lg:col-span-2">
-            <x-card shadow class="bg-white min-h-[400px]">
-                <div class="flex justify-between items-center mb-4 border-b pb-2">
-                    <div>
-                        <h3 class="text-lg font-bold text-gray-800">Detalle de Productos a Despachar</h3>
-                        <p class="text-xs text-gray-400">Verifique bien las cantidades antes de confirmar la salida.</p>
-                    </div>
-                    <span class="badge badge-neutral font-bold">{{ count($items) }} Items</span>
-                </div>
-
-                <div class="overflow-x-auto rounded-xl border border-gray-100">
-                    <table class="w-full text-left border-collapse bg-white">
-                        <thead>
-                            <tr class="bg-gray-100 text-gray-700 text-xs font-bold uppercase tracking-wider border-b">
-                                <th class="p-4">Producto</th>
-                                <th class="p-4 text-center">Stock Actual</th>
-                                <th class="p-4 text-center">Cantidad Salida</th>
-                                <th class="p-4 text-center">Nuevo Stock Simulado</th>
-                                <th class="p-4 text-center">Acciones</th>
-                            </tr>
-                        </thead>
-                        <tbody class="divide-y divide-gray-100 text-sm">
-                            @forelse($items as $index => $item)
-                                <tr class="hover:bg-gray-50 transition-colors">
-                                    <td class="p-4 font-medium text-gray-900">{{ $item['nombre'] }}</td>
-                                    <td class="p-4 text-center text-gray-500 font-semibold">{{ $item['stock_actual'] }}</td>
-                                    <td class="p-4 text-center text-error font-bold text-base bg-red-50/50">
-                                        - {{ $item['cantidad'] }}
-                                    </td>
-                                    <td class="p-4 text-center font-bold text-success">
-                                        {{ $item['stock_actual'] - $item['cantidad'] }}
-                                    </td>
-                                    <td class="p-4 text-center">
-                                        <button
-                                            wire:click="eliminarItem({{ $index }})"
-                                            class="p-2 text-gray-400 hover:text-error rounded-lg hover:bg-red-50 transition-colors"
-                                            title="Eliminar de la lista"
-                                        >
-                                            <x-icon name="o-trash" class="w-5 h-5" />
-                                        </button>
-                                    </td>
-                                </tr>
-                            @empty
-                                <tr>
-                                    <td colspan="5" class="p-8 text-center text-gray-400">
-                                        <x-icon name="o-archive-box-x-mark" class="w-12 h-12 mx-auto text-gray-300 mb-2" />
-                                        No hay productos añadidos a la lista todavía. Use el buscador de la izquierda.
-                                    </td>
-                                </tr>
-                            @endforelse
-                        </tbody>
-                    </table>
-                </div>
-
-                @if(!empty($items))
-                    <div class="mt-6 flex justify-end pt-4 border-t border-gray-100">
-                        <x-button
-                            label="Procesar Salida de Inventario"
-                            wire:click="guardarSalida"
-                            icon="o-check-circle"
-                            class="btn-error text-white btn-lg shadow-md font-black"
-                            wire:loading.attr="disabled"
-                        />
-                    </div>
-                @endif
-            </x-card>
-        </div>
-
-    </div>
-    <div class="mt-8">
-        <x-card title="Historial de Salidas Registradas" shadow separator class="bg-white">
-            <x-table :headers="$headers" :rows="$this->salidasHistoricas" with-pagination>
-
-                @scope('cell_id', $salida)
-                    <span class="font-bold text-gray-700">
-                        SAL-{{ str_pad($salida->id, 4, '0', STR_PAD_LEFT) }}
-                    </span>
-                @endscope
-
-                @scope('cell_output_date', $salida)
-                    <span class="text-sm font-medium text-gray-600">
-                        {{ date('d/m/Y', strtotime($salida->output_date)) }}
-                    </span>
-                @endscope
-
-                @scope('cell_reason', $salida)
-                    <span class="badge badge-ghost font-bold">{{ $salida->reason }}</span>
-                @endscope
-
-                @scope('cell_notes', $salida)
-                    <div class="max-w-md truncate text-sm text-gray-500" title="{{ $salida->notes }}">
-                        {{ $salida->notes ?? 'Sin observaciones' }}
-                    </div>
-                @endscope
-
-                <x-slot:empty>
-                    <div class="text-center p-8 text-gray-400">
-                        <x-icon name="o-archive-box-x-mark" class="w-12 h-12 inline mb-2 text-gray-300" />
-                        <p class="font-medium">No se han registrado salidas en el sistema.</p>
-                    </div>
-                </x-slot:empty>
-            </x-table>
-        </x-card>
     </div>
 </div>

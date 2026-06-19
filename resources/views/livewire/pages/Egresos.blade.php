@@ -2,7 +2,6 @@
 
 use Livewire\Volt\Component;
 use App\Models\CashRegister;
-use App\Models\Product;
 use Mary\Traits\Toast;
 use Illuminate\Support\Facades\DB;
 
@@ -20,7 +19,7 @@ new class extends Component {
             ->first();
 
         if (!$activeRegister) {
-            $this->error('No puedes registrar egresos porque no hay ninguna caja abierta actualmente.');
+            $this->error('No puedes registrar egresos porque no hay ninguna caja abierta.');
             return;
         }
 
@@ -28,10 +27,8 @@ new class extends Component {
             'concept' => 'required|string|max:255|min:5',
             'amount' => 'required|numeric|min:1',
         ], [
-            'concept.required' => 'Debes especificar en qué se gastó el dinero.',
-            'concept.min' => 'El concepto debe ser más descriptivo (mínimo 5 letras).',
-            'amount.required' => 'El monto del gasto es obligatorio.',
-            'amount.min' => 'El monto debe ser mayor a C$ 0.'
+            'concept.required' => 'Debes especificar el concepto del gasto.',
+            'amount.min' => 'El monto debe ser mayor a 0.'
         ]);
 
         DB::transaction(function () use ($activeRegister) {
@@ -53,8 +50,8 @@ new class extends Component {
             ]);
         });
 
-        $this->success('Egreso registrado correctamente y descontado de la caja.');
-         $this->reset(['concept', 'amount']);
+        $this->success('Egreso registrado correctamente.', position: 'toast-top toast-center');
+        $this->reset(['concept', 'amount']);
     }
 
     public function deleteExpense($id)
@@ -69,7 +66,7 @@ new class extends Component {
             ->first();
 
         if (!$expense) {
-            $this->error('Egreso no encontrado.');
+            $this->error('Egreso no encontrado o ya no se puede eliminar.');
             return;
         }
 
@@ -110,7 +107,7 @@ new class extends Component {
             'totalExpenses' => $totalExpenses,
             'isBoxOpen' => $activeRegister ? true : false,
             'headers' => [
-                ['key' => 'id', 'label' => 'N°'],
+                ['key' => 'id', 'label' => 'ID'],
                 ['key' => 'concept', 'label' => 'CONCEPTO / DESCRIPCIÓN'],
                 ['key' => 'amount', 'label' => 'MONTO'],
                 ['key' => 'date', 'label' => 'HORA'],
@@ -120,65 +117,61 @@ new class extends Component {
     }
 }; ?>
 
-<div>
-    <x-header title="Salidas de Dinero (Egresos)" subtitle="Registrar gastos rápidos de caja de Imprenta Minerva" separator />
+<div class="p-6 bg-gray-50/50 min-h-screen">
+    <x-header title="Salidas de Dinero (Egresos)" subtitle="Registrar gastos operativos de Imprenta Minerva" separator class="mb-6" />
 
     @if(!$isBoxOpen)
-        <x-alert title="Caja Cerrada" description="Debes abrir el turno en el Panel de Control antes de poder registrar salidas de dinero." icon="o-exclamation-triangle" class="alert-warning mb-6" />
+        <x-alert title="Caja Cerrada" description="No hay turnos activos para registrar gastos." icon="o-lock-closed" class="alert-error mb-6 shadow-sm" />
     @endif
+
+    {{-- Resumen de Gastos --}}
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+        <x-stat title="Total Gastos (Turno)"
+                value="C$ {{ number_format($totalExpenses, 2) }}"
+                icon="o-arrow-trending-down"
+                class="bg-white border-l-4 border-error shadow-sm hover:shadow-md transition-shadow" />
+    </div>
 
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
-        <x-card title="Nuevo Gasto" subtitle="El monto se restará del efectivo final" icon="o-minus-circle" class="h-fit">
+        {{-- Formulario de Egreso --}}
+        <x-card title="Registrar nuevo egreso" icon="o-minus-circle" shadow class="bg-white border-t-4 border-error">
             <x-form wire:submit="saveExpense">
-                <x-input label="¿En qué se gastó el dinero?" wire:model="concept" placeholder="Ej: Compra de café y azúcar para personal" icon="o-shopping-bag" :disabled="!$isBoxOpen" />
-
-                <x-input label="Monto gastado (C$)" wire:model="amount" type="number" step="0.01" prefix="C$" placeholder="0.00" :disabled="!$isBoxOpen" />
-
+                <x-input label="Concepto / Descripción *" wire:model="concept" placeholder="Ej: Compra de materiales..." icon="o-pencil-square" :disabled="!$isBoxOpen" class="bg-gray-50" />
+                <x-input label="Monto gastado *" wire:model="amount" type="number" step="0.01" prefix="C$" placeholder="0.00" :disabled="!$isBoxOpen" class="bg-gray-50 font-black text-error" />
                 <x-slot:actions>
-                    <x-button label="Registrar Salida" type="submit" icon="o-check" class="btn-primary w-full" spinner="saveExpense" :disabled="!$isBoxOpen" />
+                    <x-button label="Confirmar Salida de Dinero" type="submit" icon="o-check-circle" class="btn-error text-white w-full shadow-lg hover:scale-105 transition-transform" spinner="saveExpense" :disabled="!$isBoxOpen" />
                 </x-slot:actions>
             </x-form>
         </x-card>
 
+        {{-- Tabla de Movimientos --}}
         <div class="lg:col-span-2">
-            <x-card title="Gastos del Turno Actual" subtitle="Total acumulado en salidas: C$ {{ number_format($totalExpenses, 2) }}" icon="o-list-bullet">
-
-                <x-table :headers="$headers" :rows="$expenses">
+            <x-card title="Movimientos Recientes" icon="o-list-bullet" shadow class="bg-white min-h-[400px]">
+                <x-table :headers="$headers" :rows="$expenses" class="table-sm">
                     @scope('cell_id', $expense)
-                        <span class="text-xs text-gray-400">#{{ $expense->id }}</span>
+                        <span class="text-[10px] font-black text-gray-400">#{{ str_pad($expense->id, 3, '0', STR_PAD_LEFT) }}</span>
                     @endscope
-
                     @scope('cell_concept', $expense)
-                        <div class="font-bold text-gray-700">{{ $expense->concept }}</div>
+                        <div class="font-bold text-gray-800">{{ $expense->concept }}</div>
                     @endscope
-
                     @scope('cell_amount', $expense)
-                        <span class="font-bold text-error">
-                            - C$ {{ number_format($expense->amount, 2) }}
-                        </span>
+                        <span class="font-black text-error">- C$ {{ number_format($expense->amount, 2) }}</span>
                     @endscope
-
                     @scope('cell_date', $expense)
-                        <span class="text-xs text-gray-500">
-                            {{ date('g:i A', strtotime($expense->movement_date)) }}
-                        </span>
+                        <span class="text-xs font-medium text-gray-500">{{ date('h:i A', strtotime($expense->movement_date)) }}</span>
                     @endscope
-
                     @scope('cell_actions', $expense)
-                        <x-button icon="o-trash" wire:click="deleteExpense({{ $expense->id }})" wire:confirm="¿Seguro que deseas eliminar este registro de gasto?" class="btn-xs btn-circle btn-ghost text-error" spinner />
+                        <x-button icon="o-trash" wire:click="deleteExpense({{ $expense->id }})" wire:confirm="¿Seguro que deseas eliminar este egreso?" class="btn-sm btn-circle btn-ghost text-gray-400 hover:text-error" spinner />
                     @endscope
-
                     <x-slot:empty>
-                        <div class="text-center p-4 text-gray-400">
-                            <x-icon name="o-check-badge" class="w-8 h-8 inline mb-2 text-success" />
-                            <p>No se han registrado salidas de dinero en este turno.</p>
+                        <div class="text-center py-10 text-gray-400">
+                            <x-icon name="o-check-badge" class="w-10 h-10 inline mb-2 text-success" />
+                            <p>No hay gastos registrados en este turno.</p>
                         </div>
                     </x-slot:empty>
                 </x-table>
-
             </x-card>
         </div>
-
     </div>
 </div>
