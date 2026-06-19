@@ -5,7 +5,8 @@ use Illuminate\Support\Facades\Route;
 use Livewire\Volt\Volt;
 
 Volt::route('/login', 'auth.login')->name('login')->middleware('guest');
-
+Volt::route('/restablecer-contrasena', 'auth.restablecercont')->name('restablecercont')->middleware('guest');
+Volt::route('/restablecer-contrasena/{token}', 'auth.resetpassword')->name('restablecercont.reset')->middleware('guest');
 Route::middleware(['auth'])->group(function () {
     Volt::route('/', 'pages.menu')->name('dashboard');
 
