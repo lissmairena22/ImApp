@@ -184,7 +184,7 @@ new class extends Component
             <x-button
                 link="/pedidos"
                 icon="o-document-plus"
-                label="Nuevo Pedido"
+                label="Pedidos"
                 class="btn-info text-white btn-sm shadow hover:shadow-md hover:-translate-y-0.5 transition-all"
             />
 

@@ -294,7 +294,6 @@ new class extends Component {
                              wire:model="nombre"
                              icon="o-building-office-2"
                              class="{{ $isEditMode ? 'bg-gray-100 text-gray-500' : 'bg-white font-bold' }}"
-                             readonly="{{ $isEditMode }}"
                              required />
 
                     <x-input label="RUC *"
@@ -302,7 +301,6 @@ new class extends Component {
                              icon="o-identification"
                              class="{{ $isEditMode ? 'bg-gray-100 text-gray-500 font-mono' : 'bg-white font-mono uppercase' }}"
                              placeholder="Ej: J0000000000000"
-                             readonly="{{ $isEditMode }}"
                              required />
                 </div>
 

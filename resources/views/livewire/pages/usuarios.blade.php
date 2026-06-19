@@ -11,10 +11,10 @@ new class extends Component {
 
     public string $search = '';
     public string $filter = 'Todos';
+    public bool $showPassword = false;
 
     public bool $drawerModal = false;
     public bool $isEditMode = false;
-    public bool $showPassword = false;
 
     public $user_id, $name, $username, $password, $role, $status = 'Activo';
 
@@ -42,6 +42,13 @@ new class extends Component {
 
         $this->isEditMode = true;
         $this->drawerModal = true;
+    }
+
+    public function toggleStatus(User $user)
+    {
+        $user->status = ($user->status === 'Activo') ? 'Inactivo' : 'Activo';
+        $user->save();
+        $this->success("Usuario {$user->username} ahora está " . strtolower($user->status));
     }
 
     public function save()
@@ -169,8 +176,24 @@ new class extends Component {
                 <x-badge value="{{ $user->status }}" class="{{ $user->status == 'Activo' ? 'badge-success' : 'badge-error' }} text-white badge-sm font-bold shadow-sm" />
             @endscope
 
-            @scope('cell_actions', $user)
-                <x-button icon="o-pencil-square" wire:click="edit({{ $user->id }})" class="btn-sm btn-circle btn-ghost text-gray-400 hover:text-primary" />
+           @scope('cell_actions', $user)
+                <div class="flex items-center gap-1">
+                    <x-button
+                        icon="o-pencil-square"
+                        wire:click="edit({{ $user->id }})"
+                        class="btn-sm btn-circle btn-ghost text-gray-400 hover:text-primary"
+                        tooltip="Editar"
+                    />
+
+                    <x-button
+                        icon="{{ $user->status === 'Activo' ? 'o-no-symbol' : 'o-arrow-path' }}"
+                        wire:click="toggleStatus({{ $user->id }})"
+                        class="btn-sm btn-circle btn-ghost {{ $user->status === 'Activo' ? 'text-error' : 'text-success' }}"
+                        tooltip="{{ $user->status === 'Activo' ? 'Desactivar' : 'Activar' }}"
+                        wire:confirm="¿Estás seguro de cambiar el estado de este usuario?"
+                        spinner
+                    />
+                </div>
             @endscope
         </x-table>
     </x-card>
@@ -187,16 +210,28 @@ new class extends Component {
                     <x-input label="Nombre de Usuario (Login)" wire:model="username" icon="o-at-symbol" class="bg-white" required />
                 </div>
 
-                {{-- Seguridad y Permisos --}}
                 <div class="bg-indigo-50/50 p-5 rounded-2xl border border-indigo-50 space-y-4">
                     <h4 class="text-[10px] font-black text-indigo-400 uppercase tracking-widest flex items-center gap-2">
                         <x-icon name="o-lock-closed" class="w-4 h-4" /> Seguridad y Permisos
                     </h4>
 
-                    <x-input label="Contraseña" wire:model="password" type="{{ $showPassword ? 'text' : 'password' }}" icon="o-key" class="bg-white"
-                             hint="{{ $isEditMode ? 'Escriba para cambiar, deje vacío para mantener.' : 'Mínimo 6 caracteres.' }}"
-                             suffix="{{ $showPassword ? 'o-eye-slash' : 'o-eye' }}"
-                             wire:click="$toggle('showPassword')" />
+                    <x-input
+                        label="Contraseña"
+                        wire:model="password"
+                        type="{{ $showPassword ? 'text' : 'password' }}"
+                        icon="o-key"
+                        placeholder="{{ $isEditMode ? 'Dejar en blanco para no cambiar' : 'Mínimo 6 caracteres' }}"
+                        class="bg-white"
+                    >
+                        <x-slot:append>
+                            <x-button
+                                icon="{{ $showPassword ? 'o-eye-slash' : 'o-eye' }}"
+                                class="btn-ghost btn-sm"
+                                @click="$wire.showPassword = !$wire.showPassword"
+                                type="button"
+                            />
+                        </x-slot:append>
+                </x-input>
 
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <x-select label="Rol *" wire:model="role" icon="o-shield-check" class="bg-white"
