@@ -15,7 +15,7 @@ new class extends Component {
     public bool $isEditMode = false;
 
     // Propiedades del Formulario
-    public $user_id, $name, $username, $password, $role, $status = 'Activo';
+    public $user_id, $name, $username, $email, $password, $role, $status = 'Activo';
 
     public function create()
     {
@@ -29,6 +29,7 @@ new class extends Component {
         $this->user_id = $user->id;
         $this->name = $user->name;
         $this->username = $user->username;
+        $this->email = $user->email;
         $this->role = $user->role;
         $this->status = $user->status;
         $this->password = ''; // Vacío por seguridad
@@ -42,6 +43,7 @@ new class extends Component {
         $rules = [
             'name' => 'required|string|max:255',
             'username' => 'required|string|unique:users,username,' . $this->user_id,
+            'email' => 'nullable|email|unique:users,email,' . $this->user_id,
             'role' => 'required|in:Administrador,Cajero,Diseñador,Produccion',
             'status' => 'required|in:Activo,Inactivo',
         ];
@@ -56,6 +58,7 @@ new class extends Component {
         $data = [
             'name' => $this->name,
             'username' => $this->username,
+            'email' => $this->email,
             'role' => $this->role,
             'status' => $this->status,
         ];
@@ -72,7 +75,7 @@ new class extends Component {
 
     public function resetForm()
     {
-        $this->reset(['user_id', 'name', 'username', 'password', 'role']);
+        $this->reset(['user_id', 'name', 'username', 'email', 'password', 'role']);
         $this->status = 'Activo';
     }
 
@@ -140,6 +143,7 @@ new class extends Component {
         <x-form wire:submit="save">
             <x-input label="Nombre Completo" wire:model="name" icon="o-user" />
             <x-input label="Nombre de Usuario (Login)" wire:model="username" icon="o-at-symbol" />
+            <x-input label="Correo electrónico" wire:model="email" icon="o-envelope" placeholder="usuario@correo.com" />
 
             <x-input label="Contraseña" wire:model="password" type="password" icon="o-key"
                      placeholder="{{ $isEditMode ? 'Dejar en blanco para no cambiar' : 'Mínimo 6 caracteres' }}" />

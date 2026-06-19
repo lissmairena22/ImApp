@@ -3,10 +3,7 @@ use Livewire\Attributes\Layout;
 use Livewire\Volt\Component;
 use Illuminate\Support\Facades\Auth;
 
-new
- #[Layout('layouts.guest')]
-
-class extends Component {
+new #[Layout('layouts.guest')] class extends Component {
     public string $username = '';
     public string $password = '';
 
@@ -26,45 +23,62 @@ class extends Component {
     }
 }; ?>
 
-<div class="w-full max-w-sm p-4">
-    <x-card class="shadow-2xl border-t-4 border-primary bg-base-100">
-        <div class="mb-8 text-center">
-            <x-icon name="o-printer" class="w-12 h-12 text-primary mb-2" />
-            <h1 class="text-2xl font-bold italic">Imprenta Minnerva</h1>
-            <p class="text-sm text-gray-500">Gestión de Producción y Ventas</p>
+<div class="flex flex-col items-center justify-center min-h-screen p-6 bg-base-200">
+    
+    <x-card class="w-full max-w-md shadow-xl border border-base-300 overflow-hidden">
+        
+        <!-- Header con un toque elegante -->
+        <div class="p-6 border-b border-base-200 text-center bg-base-100">
+            <div class="mx-auto w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mb-4">
+                <x-icon name="o-printer" class="w-8 h-8 text-primary" />
+            </div>
+            <h1 class="text-3xl font-extrabold text-base-content tracking-tight">Imprenta Minnerva</h1>
+            <p class="text-sm text-base-content/60 font-medium">Gestión de Producción y Ventas</p>
         </div>
 
-        <x-form wire:submit="authenticate">
-            <x-input
-                label="Usuario"
-                wire:model="username"
-                icon="o-user"
-                placeholder="Ingresa tu usuario"
-                inline
-            />
-
-            <x-input
-                label="Contraseña"
-                wire:model="password"
-                type="password"
-                icon="o-key"
-                placeholder="********"
-                inline
-            />
-
-            <x-slot:actions>
-                <x-button
-                    label="Iniciar Sesión"
-                    type="submit"
-                    icon="o-arrow-right-on-rectangle"
-                    class="btn-primary w-full"
-                    spinner="authenticate"
+        <div class="p-6">
+            <x-form wire:submit="authenticate">
+                <x-input
+                    label="Usuario"
+                    wire:model="username"
+                    icon="o-user"
+                    placeholder="Tu usuario"
+                    class="input-bordered"
                 />
-            </x-slot:actions>
-        </x-form>
 
-        <div class="mt-4 text-center">
-            <span class="text-xs text-gray-400">v1.0.2 - Sistemas 2026</span>
+                <x-input
+                    label="Contraseña"
+                    wire:model="password"
+                    type="password"
+                    icon="o-key"
+                    placeholder="••••••••"
+                    class="input-bordered"
+                />
+
+                <x-slot:actions>
+                    <div class="w-full flex flex-col gap-3">
+                        <x-button
+                            label="Iniciar Sesión"
+                            type="submit"
+                            icon="o-arrow-right-on-rectangle"
+                            class="btn-primary w-full shadow-lg shadow-primary/20"
+                            spinner="authenticate"
+                        />
+                        
+                        <a href="{{ route('restablecercont') }}" wire:navigate 
+                           class="text-xs text-center text-primary hover:underline transition-all">
+                            ¿Olvidaste tu contraseña?
+                        </a>
+                    </div>
+                </x-slot:actions>
+            </x-form>
+        </div>
+
+        <!-- Footer discreto -->
+        <div class="p-4 bg-base-200/50 text-center">
+            <span class="text-[10px] uppercase tracking-widest text-base-content/40 font-semibold">
+                v1.0.2 - Sistemas 2026
+            </span>
         </div>
     </x-card>
 </div>
